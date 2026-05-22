@@ -6,7 +6,7 @@ import sys
 import random
 import os
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '../build/release/proto/python'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '../build/relwithdebinfo/proto/python'))
 import protocol_pb2
 import common_pb2
 import auth_service_pb2
