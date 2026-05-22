@@ -1,13 +1,19 @@
+name: termchat_devcontainer
+
 services:
   app:
     build:
       context: ..
       dockerfile: .devcontainer/Dockerfile
+      args:
+        UBUNTU_MIRROR: ${UBUNTU_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports}
+        UBUNTU_MIRROR_USE_HTTPS: ${UBUNTU_MIRROR_USE_HTTPS:-true}
     privileged: true
     cap_add:
       - SYS_ADMIN
     volumes:
       - ..:/workspace:cached
+      - ${HOME}/.codex:/root/.codex:cached
       - ssl-certs:/etc/mysql/certs:ro
     command: sleep infinity
     depends_on:
@@ -23,10 +29,10 @@ services:
       - SCYLLA_PORT=9042
       - SCYLLA_USERNAME=cassandra
       - SCYLLA_PASSWORD=cassandra
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
 
   mysql:
     image: mysql:8.0
-    container_name: mysql
     restart: unless-stopped
     entrypoint:
       - /bin/bash
@@ -60,7 +66,6 @@ services:
 
   scylla:
     image: scylladb/scylla:5.4
-    container_name: scylla
     ports:
       - "9042:9042"
     command: --smp 1 --memory 2G --overprovisioned 1 --developer-mode 1
@@ -74,4 +79,3 @@ services:
 volumes:
   mysql-data:
   ssl-certs:
-

@@ -3,14 +3,15 @@ set -euo pipefail
 
 SCYLLA_HOST=${SCYLLA_HOST:-scylla}
 SCYLLA_PORT=${SCYLLA_PORT:-9042}
+DOCKER_COMPOSE=(docker compose -f .devcontainer/docker-compose.yml)
 
 echo "[scylla] waiting for ScyllaDB..."
-until docker exec scylla cqlsh "$SCYLLA_HOST" "$SCYLLA_PORT" -e "DESCRIBE KEYSPACES" > /dev/null 2>&1; do
+until "${DOCKER_COMPOSE[@]}" exec -T scylla cqlsh "$SCYLLA_HOST" "$SCYLLA_PORT" -e "DESCRIBE KEYSPACES" > /dev/null 2>&1; do
   sleep 2
 done
 
 echo "[scylla] initializing keyspace and tables..."
-docker exec -i scylla cqlsh "$SCYLLA_HOST" "$SCYLLA_PORT" <<'CQL'
+"${DOCKER_COMPOSE[@]}" exec -T scylla cqlsh "$SCYLLA_HOST" "$SCYLLA_PORT" <<'CQL'
 CREATE KEYSPACE IF NOT EXISTS im
 WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
 

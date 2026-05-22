@@ -1,5 +1,5 @@
 {
-    "name": "MyWebserver Dev",
+    "name": "TermChat Dev",
     "dockerComposeFile": "docker-compose.yml",
     "service": "app",
     "customizations": {
@@ -48,7 +48,7 @@
     },
     "workspaceFolder": "/workspace",
     
-    "postCreateCommand": "cmake --preset perf",
+    "postCreateCommand": "codex --version && cmake --preset perf",
     "postStartCommand": "bash .devcontainer/init_scylla.sh",
     "runArgs": [
         "--privileged"
