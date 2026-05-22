@@ -3,6 +3,7 @@ import struct
 import sys
 import os
 import time
+from typing import Optional
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(current_dir, '..'))
@@ -35,16 +36,17 @@ class Client:
     def __init__(self, host='127.0.0.1', port=1316):
         self.host = host
         self.port = port
-        self.sock = None
-        self.user_id = None
-        self.username = None
+        self.sock: Optional[socket.socket] = None
+        self.user_id: Optional[int] = None
+        self.username: Optional[str] = None
         self.seq = int(time.time() * 1000)
     
     def connect(self):
         try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.settimeout(5.0)
-            self.sock.connect((self.host, self.port))
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5.0)
+            sock.connect((self.host, self.port))
+            self.sock = sock
             return True
         except ConnectionRefusedError:
             print(f"[!] Connection failed. Is the server running on port {self.port}?")
@@ -58,16 +60,22 @@ class Client:
     def next_seq(self):
         self.seq += 1
         return self.seq
+
+    def _socket(self) -> socket.socket:
+        if self.sock is None:
+            raise RuntimeError("Client is not connected")
+        return self.sock
     
     def send_msg(self, envelope):
         serialized_data = envelope.SerializeToString()
         msg_len = len(serialized_data)
         header = struct.pack('>I', msg_len)
-        self.sock.sendall(header + serialized_data)
+        self._socket().sendall(header + serialized_data)
     
     def recv_msg(self):
         try:
-            header_data = self.sock.recv(4)
+            sock = self._socket()
+            header_data = sock.recv(4)
             if len(header_data) < 4:
                 print("[!] Failed to read response header")
                 return None
@@ -76,7 +84,7 @@ class Client:
             
             resp_data = b''
             while len(resp_data) < resp_len:
-                packet = self.sock.recv(resp_len - len(resp_data))
+                packet = sock.recv(resp_len - len(resp_data))
                 if not packet:
                     break
                 resp_data += packet

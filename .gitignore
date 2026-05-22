@@ -37,3 +37,4 @@ webbench-1.5/webbench.o
 perf.data
 perf.svg
 perf.data.old
+tests/__pycache__

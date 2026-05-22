@@ -22,6 +22,7 @@ set(PROTO_FILES
 set(PROTO_SRCS)
 set(PROTO_HDRS)
 set(PROTO_PYS)
+set(PROTO_PYIS)
 set(PROTO_GOS)
 
 foreach(PROTO_FILE ${PROTO_FILES})
@@ -29,26 +30,29 @@ foreach(PROTO_FILE ${PROTO_FILES})
     set(PROTO_SRC "${PROTO_CPP_DIR}/${PROTO_NAME}.pb.cc")
     set(PROTO_HDR "${PROTO_CPP_DIR}/${PROTO_NAME}.pb.h")
     set(PROTO_PY "${PROTO_PY_DIR}/${PROTO_NAME}_pb2.py")
+    set(PROTO_PYI "${PROTO_PY_DIR}/${PROTO_NAME}_pb2.pyi")
     set(PROTO_GO "${PROTO_GO_DIR}/${PROTO_NAME}.pb.go")
     
     list(APPEND PROTO_SRCS ${PROTO_SRC})
     list(APPEND PROTO_HDRS ${PROTO_HDR})
     list(APPEND PROTO_PYS ${PROTO_PY})
+    list(APPEND PROTO_PYIS ${PROTO_PYI})
     list(APPEND PROTO_GOS ${PROTO_GO})
 
     add_custom_command(
-        OUTPUT ${PROTO_SRC} ${PROTO_HDR} ${PROTO_PY} ${PROTO_GO}
+        OUTPUT ${PROTO_SRC} ${PROTO_HDR} ${PROTO_PY} ${PROTO_PYI} ${PROTO_GO}
         COMMAND protobuf::protoc
         ARGS --cpp_out=${PROTO_CPP_DIR}
             --python_out=${PROTO_PY_DIR}
+            --pyi_out=${PROTO_PY_DIR}
             --go_out=${PROTO_GO_DIR} --go_opt=paths=source_relative
             -I${CMAKE_CURRENT_SOURCE_DIR} ${PROTO_FILE}
         DEPENDS ${PROTO_FILE}
-        COMMENT "Generating C++, Python and Go code from ${PROTO_NAME}.proto"
+        COMMENT "Generating C++, Python, Python stubs and Go code from ${PROTO_NAME}.proto"
     )
 endforeach()
 
-add_custom_target(proto_python_generated ALL DEPENDS ${PROTO_PYS})
+add_custom_target(proto_python_generated ALL DEPENDS ${PROTO_PYS} ${PROTO_PYIS})
 add_custom_target(proto_go_generated ALL DEPENDS ${PROTO_GOS})
 
 add_library(proto_generated STATIC ${PROTO_SRCS} ${PROTO_HDRS})

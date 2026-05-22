@@ -42,12 +42,12 @@ class TestP2PMessage(unittest.TestCase):
         header = struct.pack('>I', msg_len)
         sock.sendall(header + serialized_data)
 
-    def _recv_msg(self, sock, timeout=2.0):
+    def _recv_msg(self, sock, timeout=2.0) -> "protocol_pb2.Envelope":
         sock.settimeout(timeout)
         try:
             header_data = sock.recv(4)
             if len(header_data) < 4:
-                return None
+                self.fail("Failed to read response header")
             
             resp_len = struct.unpack('>I', header_data)[0]
             
@@ -55,17 +55,16 @@ class TestP2PMessage(unittest.TestCase):
             while len(resp_data) < resp_len:
                 packet = sock.recv(resp_len - len(resp_data))
                 if not packet:
-                    break
+                    self.fail("Connection closed while reading response body")
                 resp_data += packet
                 
             envelope = protocol_pb2.Envelope()
             envelope.ParseFromString(resp_data)
             return envelope
-        except socket.timeout:
-            return None
+        except socket.timeout as exc:
+            raise AssertionError("Timed out while waiting for response") from exc
         except Exception as e:
-            print(f"Error receiving: {e}")
-            return None
+            raise AssertionError(f"Error receiving response: {e}") from e
 
     def _register_and_login(self, username, password):
         sock = self._create_socket()
@@ -126,7 +125,6 @@ class TestP2PMessage(unittest.TestCase):
 
         # 3. A expects ACK
         ack_env = self._recv_msg(sock_a)
-        self.assertIsNotNone(ack_env, "Alice should receive ACK")
         self.assertEqual(ack_env.cmd, protocol_pb2.CMD_MSG_ACK)
         self.assertTrue(ack_env.msg_ack.success, f"Error: {ack_env.msg_ack.error_msg}")
         self.assertGreater(ack_env.msg_ack.msg_id, 0)
@@ -135,7 +133,6 @@ class TestP2PMessage(unittest.TestCase):
 
         # 4. B expects PUSH
         push_env = self._recv_msg(sock_b)
-        self.assertIsNotNone(push_env, "Bob should receive PUSH")
         self.assertEqual(push_env.cmd, protocol_pb2.CMD_P2P_MSG_PUSH)
         
         push_msg = push_env.p2p_msg_push
@@ -164,7 +161,6 @@ class TestP2PMessage(unittest.TestCase):
 
         # 6. B expects ACK
         ack_env_b = self._recv_msg(sock_b)
-        self.assertIsNotNone(ack_env_b, "Bob should receive ACK")
         self.assertEqual(ack_env_b.cmd, protocol_pb2.CMD_MSG_ACK)
         self.assertTrue(ack_env_b.msg_ack.success)
         self.assertGreater(ack_env_b.msg_ack.msg_id, 0)
@@ -173,7 +169,6 @@ class TestP2PMessage(unittest.TestCase):
 
         # 7. A expects PUSH
         push_env_a = self._recv_msg(sock_a)
-        self.assertIsNotNone(push_env_a, "Alice should receive PUSH")
         self.assertEqual(push_env_a.cmd, protocol_pb2.CMD_P2P_MSG_PUSH)
         self.assertEqual(push_env_a.p2p_msg_push.msg_id, reply_msg_id)
         self.assertEqual(push_env_a.p2p_msg_push.content.decode('utf-8'), reply_content)
