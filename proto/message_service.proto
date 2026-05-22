@@ -21,6 +21,7 @@ enum ContentType {
 }
 
 message P2PMessage {
+    // Server-assigned. Clients leave this unset when sending CMD_P2P_MSG_REQ.
     uint64 msg_id = 1;
     uint64 sender_id = 2;
     uint64 receiver_id = 3;

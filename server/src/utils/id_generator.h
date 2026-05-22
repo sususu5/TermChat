@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <random>
@@ -7,10 +8,10 @@
 
 class IdGenerator {
 public:
+    static constexpr uint64_t EPOCH = 1704067200000ULL;
+
     // generate a random 64-bit integer id
     static uint64_t GenerateRandId() {
-        constexpr uint64_t EPOCH = 1704067200000ULL;
-
         uint64_t now_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
                 .count();
@@ -24,6 +25,21 @@ public:
         uint64_t random_val = distribution(generator);
 
         return ((now_ms - EPOCH) << 22) | random_val;
+    }
+
+    static uint64_t GenerateMsgId() {
+        constexpr uint64_t SEQUENCE_MASK = 0x3FFFFFULL;
+
+        uint64_t now_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count();
+
+        if (now_ms < EPOCH) {
+            now_ms = EPOCH;
+        }
+
+        static std::atomic<uint32_t> sequence{0};
+        return ((now_ms - EPOCH) << 22) | (sequence.fetch_add(1, std::memory_order_relaxed) & SEQUENCE_MASK);
     }
 
     static std::string GenerateP2PConvId(uint64_t sender_id, uint64_t receiver_id) {

@@ -241,7 +241,7 @@ void ProtobufHandler::HandleP2PMsg(const im::Envelope& request, im::Envelope& re
     }
 
     const auto& req = request.p2p_msg_req();
-    LOG_INFO("P2P Msg request: from={} to={}, msg_id={}", CurrentUserId(), req.receiver_id(), req.msg_id());
+    LOG_INFO("P2P Msg request: from={} to={}", CurrentUserId(), req.receiver_id());
 
     im::MessageAck msg_ack;
     msg_service_->send_p2p_message(CurrentUserId(), req, &msg_ack);

@@ -2,6 +2,7 @@
 #include <ctime>
 #include "../dao/async_msg_writer.h"
 #include "../log/log.h"
+#include "../utils/id_generator.h"
 
 MsgService::MsgService(PushService* push_service) : push_service_(push_service) {
     AsyncMsgWriter::GetInstance()->Start();
@@ -24,24 +25,26 @@ void MsgService::send_p2p_message(uint64_t sender_id, const im::P2PMessage& req,
         return;
     }
 
-    AsyncMsgWriter::GetInstance()->Enqueue(req);
+    auto msg_to_store = req;
+    msg_to_store.set_msg_id(IdGenerator::GenerateMsgId());
+    msg_to_store.set_sender_id(sender_id);
 
-    auto msg_to_push = req;
-    msg_to_push.set_sender_id(sender_id);
-
-    if (msg_to_push.timestamp() == 0) {
-        msg_to_push.set_timestamp(time(nullptr));
+    if (msg_to_store.timestamp() == 0) {
+        msg_to_store.set_timestamp(time(nullptr));
     }
+
+    AsyncMsgWriter::GetInstance()->Enqueue(msg_to_store);
 
     if (push_service_) {
-        push_service_->push_p2p_message(msg_to_push);
+        push_service_->push_p2p_message(msg_to_store);
     }
 
-    resp->set_msg_id(req.msg_id());
+    resp->set_msg_id(msg_to_store.msg_id());
     resp->set_success(true);
     resp->set_ref_seq(0);
 
-    LOG_INFO("P2P Message from User[{}] to User[{}] processed.", sender_id, req.receiver_id());
+    LOG_INFO("P2P Message[{}] from User[{}] to User[{}] processed.", msg_to_store.msg_id(), sender_id,
+             req.receiver_id());
 }
 
 void MsgService::sync_messages(uint64_t user_id, const im::SyncMessagesReq& req, im::SyncMessagesResp* resp) {

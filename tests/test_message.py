@@ -109,7 +109,6 @@ class TestP2PMessage(unittest.TestCase):
 
         # 2. A sends message to B
         msg_content = "Hello Bob, this is Alice!"
-        msg_id = ts * 1000 + 1
         
         envelope = protocol_pb2.Envelope()
         envelope.seq = 100
@@ -117,8 +116,6 @@ class TestP2PMessage(unittest.TestCase):
         envelope.timestamp = int(time.time())
         
         p2p_msg = envelope.p2p_msg_req
-        p2p_msg.msg_id = msg_id
-        p2p_msg.sender_id = id_a
         p2p_msg.receiver_id = id_b
         p2p_msg.content_type = message_service_pb2.CONTENT_TEXT
         p2p_msg.content = msg_content.encode('utf-8')
@@ -131,8 +128,9 @@ class TestP2PMessage(unittest.TestCase):
         ack_env = self._recv_msg(sock_a)
         self.assertIsNotNone(ack_env, "Alice should receive ACK")
         self.assertEqual(ack_env.cmd, protocol_pb2.CMD_MSG_ACK)
-        self.assertEqual(ack_env.msg_ack.msg_id, msg_id)
         self.assertTrue(ack_env.msg_ack.success, f"Error: {ack_env.msg_ack.error_msg}")
+        self.assertGreater(ack_env.msg_ack.msg_id, 0)
+        msg_id = ack_env.msg_ack.msg_id
         print("A received ACK")
 
         # 4. B expects PUSH
@@ -141,6 +139,7 @@ class TestP2PMessage(unittest.TestCase):
         self.assertEqual(push_env.cmd, protocol_pb2.CMD_P2P_MSG_PUSH)
         
         push_msg = push_env.p2p_msg_push
+        self.assertEqual(push_msg.msg_id, msg_id)
         self.assertEqual(push_msg.sender_id, id_a)
         self.assertEqual(push_msg.receiver_id, id_b)
         self.assertEqual(push_msg.content.decode('utf-8'), msg_content)
@@ -148,7 +147,6 @@ class TestP2PMessage(unittest.TestCase):
 
         # 5. B replies to A
         reply_content = "Hi Alice! Got it."
-        reply_msg_id = ts * 1000 + 2
         
         envelope = protocol_pb2.Envelope()
         envelope.seq = 101
@@ -156,8 +154,6 @@ class TestP2PMessage(unittest.TestCase):
         envelope.timestamp = int(time.time())
         
         p2p_msg = envelope.p2p_msg_req
-        p2p_msg.msg_id = reply_msg_id
-        p2p_msg.sender_id = id_b
         p2p_msg.receiver_id = id_a
         p2p_msg.content_type = message_service_pb2.CONTENT_TEXT
         p2p_msg.content = reply_content.encode('utf-8')
@@ -171,12 +167,15 @@ class TestP2PMessage(unittest.TestCase):
         self.assertIsNotNone(ack_env_b, "Bob should receive ACK")
         self.assertEqual(ack_env_b.cmd, protocol_pb2.CMD_MSG_ACK)
         self.assertTrue(ack_env_b.msg_ack.success)
+        self.assertGreater(ack_env_b.msg_ack.msg_id, 0)
+        reply_msg_id = ack_env_b.msg_ack.msg_id
         print("B received ACK")
 
         # 7. A expects PUSH
         push_env_a = self._recv_msg(sock_a)
         self.assertIsNotNone(push_env_a, "Alice should receive PUSH")
         self.assertEqual(push_env_a.cmd, protocol_pb2.CMD_P2P_MSG_PUSH)
+        self.assertEqual(push_env_a.p2p_msg_push.msg_id, reply_msg_id)
         self.assertEqual(push_env_a.p2p_msg_push.content.decode('utf-8'), reply_content)
         print("A received PUSH")
 

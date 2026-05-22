@@ -371,6 +371,7 @@ bool NetworkManager::SendP2PMessage(uint64_t receiver_id, const std::string& con
 
     const auto& resp = resp_env.msg_ack();
     if (resp.success()) {
+        req.set_msg_id(resp.msg_id());
         {
             std::lock_guard<std::mutex> lock(mutex_);
             p2p_chat_history_[receiver_id].push_back(req);
