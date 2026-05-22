@@ -35,7 +35,7 @@ void PushService::push_friend_req(uint64_t req_id, uint64_t sender_id, const std
     send_envelope(receiver_id, envelope);
 }
 
-void PushService::send_envelope(uint64_t target_id, const im::Envelope& envelope) {
+bool PushService::send_envelope(uint64_t target_id, const im::Envelope& envelope) {
     TcpConnection* conn = nullptr;
     {
         std::lock_guard<std::mutex> lock(mtx_);
@@ -49,8 +49,10 @@ void PushService::send_envelope(uint64_t target_id, const im::Envelope& envelope
         if (envelope.SerializeToString(&serialized)) {
             conn->enqueue_message(std::move(serialized));
             LOG_INFO("Push enqueued for User[{}], cmd={}", target_id, static_cast<int>(envelope.cmd()));
+            return true;
         }
     }
+    return false;
 }
 
 void PushService::push_friend_status(uint64_t sender_id, uint64_t receiver_id, const std::string& receiver_name,
@@ -68,7 +70,7 @@ void PushService::push_friend_status(uint64_t sender_id, uint64_t receiver_id, c
     send_envelope(sender_id, envelope);
 }
 
-void PushService::push_p2p_message(const im::P2PMessage& msg) {
+bool PushService::push_p2p_message(const im::P2PMessage& msg) {
     im::Envelope envelope;
     envelope.set_seq(0);
     envelope.set_cmd(im::CMD_P2P_MSG_PUSH);
@@ -76,7 +78,7 @@ void PushService::push_p2p_message(const im::P2PMessage& msg) {
 
     *envelope.mutable_p2p_msg_push() = msg;
 
-    send_envelope(msg.receiver_id(), envelope);
+    return send_envelope(msg.receiver_id(), envelope);
 }
 
 void PushService::push_to_user(uint64_t user_id, std::string data) {

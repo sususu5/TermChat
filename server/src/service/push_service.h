@@ -22,7 +22,7 @@ public:
                          const std::string& verify_msg);
     void push_friend_status(uint64_t sender_id, uint64_t receiver_id, const std::string& receiver_name,
                             const im::FriendAction& action);
-    void push_p2p_message(const im::P2PMessage& msg);
+    bool push_p2p_message(const im::P2PMessage& msg);
 
     // Generic push
     void push_to_user(uint64_t user_id, std::string data);
@@ -31,5 +31,5 @@ private:
     std::mutex mtx_;
     std::unordered_map<uint64_t, TcpConnection*> online_connections_;
 
-    void send_envelope(uint64_t receiver_id, const im::Envelope& envelope);
+    bool send_envelope(uint64_t receiver_id, const im::Envelope& envelope);
 };

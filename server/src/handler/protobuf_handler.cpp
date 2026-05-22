@@ -237,6 +237,7 @@ void ProtobufHandler::HandleP2PMsg(const im::Envelope& request, im::Envelope& re
         auto* resp = response.mutable_msg_ack();
         resp->set_success(false);
         resp->set_error_msg("Invalid request: missing p2p message payload");
+        resp->set_status(im::ACK_STATUS_UNKNOWN);
         return;
     }
 
@@ -245,6 +246,7 @@ void ProtobufHandler::HandleP2PMsg(const im::Envelope& request, im::Envelope& re
 
     im::MessageAck msg_ack;
     msg_service_->send_p2p_message(CurrentUserId(), req, &msg_ack);
+    msg_ack.set_ref_seq(request.seq());
     response.set_cmd(im::CMD_MSG_ACK);
     response.mutable_msg_ack()->CopyFrom(msg_ack);
 }
@@ -279,6 +281,12 @@ bool ProtobufHandler::RequireAuth(im::Envelope& response, im::CommandType resp_c
     if (!conn_ || !conn_->is_logged_in()) {
         LOG_WARN("Unauthorized request: user not logged in");
         response.set_cmd(resp_cmd);
+        if (resp_cmd == im::CMD_MSG_ACK) {
+            auto* ack = response.mutable_msg_ack();
+            ack->set_success(false);
+            ack->set_error_msg("Unauthorized: user not logged in");
+            ack->set_status(im::ACK_STATUS_UNKNOWN);
+        }
         return true;
     }
     return false;

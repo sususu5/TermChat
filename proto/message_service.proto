@@ -20,6 +20,13 @@ enum ContentType {
     CONTENT_VIDEO   = 4;
 }
 
+enum MessageAckStatus {
+    ACK_STATUS_UNKNOWN   = 0;
+    ACK_STATUS_RECEIVED  = 1; // Accepted by the server.
+    ACK_STATUS_PERSISTED = 2; // Persisted to durable storage.
+    ACK_STATUS_DELIVERED = 3; // Enqueued to the receiver's online connection.
+}
+
 message P2PMessage {
     // Server-assigned. Clients leave this unset when sending CMD_P2P_MSG_REQ.
     uint64 msg_id = 1;
@@ -28,6 +35,8 @@ message P2PMessage {
     ContentType content_type = 4;
     bytes content = 5;
     int64 timestamp = 6;
+    // Client-assigned idempotency key. Retries of the same send reuse this value.
+    uint64 client_msg_id = 7;
 }
 
 message MessageAck {
@@ -35,6 +44,7 @@ message MessageAck {
     uint64 ref_seq = 2;
     bool success = 3;
     string error_msg = 4;
+    MessageAckStatus status = 5;
 }
 
 message SyncMessagesReq {

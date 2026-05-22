@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -62,7 +63,11 @@ private:
 
     // Internal Helpers
     bool SendEnvelope(const im::Envelope& env);
-    bool SendRequestAndWait(const im::Envelope& request, im::Envelope& response, im::CommandType expected_cmd);
+    bool SendRequestAndWait(im::Envelope request, im::Envelope& response, im::CommandType expected_cmd);
+    bool WaitForResponse(uint64_t seq, im::Envelope& response, im::CommandType expected_cmd,
+                         std::chrono::milliseconds timeout);
+    uint64_t NextSeq();
+    uint64_t GenerateClientMsgId();
     void ListenerLoop();
     void HeartbeatLoop();
     void ClearAuth();
@@ -88,8 +93,16 @@ private:
 
     std::mutex mutex_;
     std::condition_variable cv_response_;
-    im::Envelope response_envelope_;
-    bool has_response_ = false;
+    uint64_t next_seq_ = 1;
+    std::unordered_map<uint64_t, im::Envelope> response_by_seq_;
+
+    struct PendingP2PMessage {
+        im::Envelope envelope;
+        im::P2PMessage message;
+        int attempts = 0;
+    };
+
+    std::unordered_map<uint64_t, PendingP2PMessage> pending_p2p_messages_;
 
     // Callbacks & Storage
     OnErrorCallback on_error_callback_;

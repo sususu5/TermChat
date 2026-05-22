@@ -17,14 +17,14 @@ WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
 
 CREATE TABLE IF NOT EXISTS im.messages (
   conversation_id text,
-  timestamp bigint,
   message_id bigint,
+  timestamp bigint,
   sender_id bigint,
   receiver_id bigint,
   content_type int,
   content blob,
-  PRIMARY KEY (conversation_id, timestamp, message_id)
-) WITH CLUSTERING ORDER BY (timestamp DESC);
+  PRIMARY KEY (conversation_id, message_id)
+);
 
 CREATE TABLE IF NOT EXISTS im.user_messages (
   user_id bigint,

@@ -60,25 +60,46 @@ bool NetworkManager::SendEnvelope(const im::Envelope& env) {
     return sent == static_cast<ssize_t>(packet.size());
 }
 
-bool NetworkManager::SendRequestAndWait(const im::Envelope& request, im::Envelope& response,
-                                        im::CommandType expected_cmd) {
+uint64_t NetworkManager::NextSeq() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return next_seq_++;
+}
+
+uint64_t NetworkManager::GenerateClientMsgId() {
+    const auto now_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    return (static_cast<uint64_t>(now_ms) << 20) | (NextSeq() & 0xFFFFFULL);
+}
+
+bool NetworkManager::WaitForResponse(uint64_t seq, im::Envelope& response, im::CommandType expected_cmd,
+                                     std::chrono::milliseconds timeout) {
     std::unique_lock<std::mutex> lock(mutex_);
-    has_response_ = false;
+    const bool ready = cv_response_.wait_for(lock, timeout, [this, seq] { return response_by_seq_.contains(seq); });
+    if (!ready) {
+        return false;
+    }
+
+    auto it = response_by_seq_.find(seq);
+    if (it == response_by_seq_.end()) {
+        return false;
+    }
+
+    response = std::move(it->second);
+    response_by_seq_.erase(it);
+    return response.cmd() == expected_cmd;
+}
+
+bool NetworkManager::SendRequestAndWait(im::Envelope request, im::Envelope& response, im::CommandType expected_cmd) {
+    if (request.seq() == 0) {
+        request.set_seq(NextSeq());
+    }
 
     if (!SendEnvelope(request)) {
         return false;
     }
 
-    // Wait for response with a timeout
-    if (cv_response_.wait_for(lock, std::chrono::seconds(5), [this] { return has_response_; })) {
-        if (response_envelope_.cmd() == expected_cmd) {
-            response = response_envelope_;
-            return true;
-        }
-        return false;
-    } else {
-        return false;
-    }
+    return WaitForResponse(request.seq(), response, expected_cmd, std::chrono::seconds(5));
 }
 
 void NetworkManager::ListenerLoop() {
@@ -161,8 +182,7 @@ void NetworkManager::ListenerLoop() {
             }
         } else {
             std::lock_guard<std::mutex> lock(mutex_);
-            response_envelope_ = env;
-            has_response_ = true;
+            response_by_seq_[env.seq()] = env;
             // If the command is not push, notify the response
             cv_response_.notify_one();
         }
@@ -254,6 +274,8 @@ void NetworkManager::ClearAuth() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         p2p_chat_history_.clear();
+        pending_p2p_messages_.clear();
+        response_by_seq_.clear();
         pending_friend_requests_.clear();
     }
 }
@@ -352,6 +374,9 @@ void NetworkManager::RemovePendingRequest(uint64_t req_id) {
 }
 
 bool NetworkManager::SendP2PMessage(uint64_t receiver_id, const std::string& content, std::string& error_msg) {
+    constexpr int kMaxAttempts = 3;
+    constexpr auto kAckTimeout = std::chrono::milliseconds(2000);
+
     im::P2PMessage req;
     req.set_sender_id(user_id_);
     req.set_receiver_id(receiver_id);
@@ -359,28 +384,60 @@ bool NetworkManager::SendP2PMessage(uint64_t receiver_id, const std::string& con
     req.set_timestamp(time(nullptr));
 
     im::Envelope env;
+    env.set_seq(NextSeq());
     env.set_cmd(im::CMD_P2P_MSG_REQ);
     env.set_timestamp(time(nullptr));
+    req.set_client_msg_id(GenerateClientMsgId());
     *env.mutable_p2p_msg_req() = req;
 
-    im::Envelope resp_env;
-    if (!SendRequestAndWait(env, resp_env, im::CMD_MSG_ACK)) {
-        error_msg = "Request timeout or network error";
-        return false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pending_p2p_messages_[env.seq()] = PendingP2PMessage{env, req, 0};
     }
 
-    const auto& resp = resp_env.msg_ack();
-    if (resp.success()) {
-        req.set_msg_id(resp.msg_id());
+    for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            p2p_chat_history_[receiver_id].push_back(req);
+            if (pending_p2p_messages_.contains(env.seq())) {
+                pending_p2p_messages_[env.seq()].attempts = attempt;
+            }
         }
-        return true;
-    } else {
-        error_msg = resp.error_msg();
-        return false;
+
+        if (!SendEnvelope(env)) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            pending_p2p_messages_.erase(env.seq());
+            error_msg = "Network error while sending message";
+            return false;
+        }
+
+        im::Envelope resp_env;
+        if (!WaitForResponse(env.seq(), resp_env, im::CMD_MSG_ACK, kAckTimeout)) {
+            continue;
+        }
+
+        const auto& resp = resp_env.msg_ack();
+        if (resp.success()) {
+            req.set_msg_id(resp.msg_id());
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                pending_p2p_messages_.erase(env.seq());
+                p2p_chat_history_[receiver_id].push_back(req);
+            }
+            return true;
+        } else {
+            std::lock_guard<std::mutex> lock(mutex_);
+            pending_p2p_messages_.erase(env.seq());
+            error_msg = resp.error_msg();
+            return false;
+        }
     }
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pending_p2p_messages_.erase(env.seq());
+    }
+    error_msg = "Message ACK timeout after retransmission";
+    return false;
 }
 
 bool NetworkManager::SyncMessages(std::string& error_msg) {

@@ -28,15 +28,15 @@ bool MsgScyllaDao::InsertMessage(const im::P2PMessage& msg) {
 
     // 1. Insert into conversation history
     constexpr const char* k_insert_history =
-        "INSERT INTO im.messages (conversation_id, timestamp, message_id, sender_id, "
+        "INSERT INTO im.messages (conversation_id, message_id, timestamp, sender_id, "
         "receiver_id, content_type, content) "
         "VALUES (?, ?, ?, ?, ?, ?, ?);";
 
     CassStatement* stmt_history = cass_statement_new(k_insert_history, 7);
     auto p2p_conv_id = IdGenerator::GenerateP2PConvId(msg.sender_id(), msg.receiver_id());
     cass_statement_bind_string(stmt_history, 0, p2p_conv_id.c_str());
-    cass_statement_bind_int64(stmt_history, 1, static_cast<cass_int64_t>(msg.timestamp()));
-    cass_statement_bind_int64(stmt_history, 2, static_cast<cass_int64_t>(msg.msg_id()));
+    cass_statement_bind_int64(stmt_history, 1, static_cast<cass_int64_t>(msg.msg_id()));
+    cass_statement_bind_int64(stmt_history, 2, static_cast<cass_int64_t>(msg.timestamp()));
     cass_statement_bind_int64(stmt_history, 3, static_cast<cass_int64_t>(msg.sender_id()));
     cass_statement_bind_int64(stmt_history, 4, static_cast<cass_int64_t>(msg.receiver_id()));
     cass_statement_bind_int32(stmt_history, 5, static_cast<cass_int32_t>(msg.content_type()));
@@ -106,7 +106,7 @@ bool MsgScyllaDao::InsertBatch(const std::vector<im::P2PMessage>& msgs) {
     CassBatch* batch = cass_batch_new(CASS_BATCH_TYPE_LOGGED);
 
     constexpr const char* k_insert_history =
-        "INSERT INTO im.messages (conversation_id, timestamp, message_id, sender_id, "
+        "INSERT INTO im.messages (conversation_id, message_id, timestamp, sender_id, "
         "receiver_id, content_type, content) "
         "VALUES (?, ?, ?, ?, ?, ?, ?);";
 
@@ -119,8 +119,8 @@ bool MsgScyllaDao::InsertBatch(const std::vector<im::P2PMessage>& msgs) {
         CassStatement* stmt1 = cass_statement_new(k_insert_history, 7);
         auto p2p_conv_id = IdGenerator::GenerateP2PConvId(msg.sender_id(), msg.receiver_id());
         cass_statement_bind_string(stmt1, 0, p2p_conv_id.c_str());
-        cass_statement_bind_int64(stmt1, 1, static_cast<cass_int64_t>(msg.timestamp()));
-        cass_statement_bind_int64(stmt1, 2, static_cast<cass_int64_t>(msg.msg_id()));
+        cass_statement_bind_int64(stmt1, 1, static_cast<cass_int64_t>(msg.msg_id()));
+        cass_statement_bind_int64(stmt1, 2, static_cast<cass_int64_t>(msg.timestamp()));
         cass_statement_bind_int64(stmt1, 3, static_cast<cass_int64_t>(msg.sender_id()));
         cass_statement_bind_int64(stmt1, 4, static_cast<cass_int64_t>(msg.receiver_id()));
         cass_statement_bind_int32(stmt1, 5, static_cast<cass_int32_t>(msg.content_type()));
