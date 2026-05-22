@@ -15,22 +15,24 @@
             ],
             "settings": {
                 "C_Cpp.intelliSenseEngine": "disabled",
+                "clangd.path": "/usr/bin/clangd",
                 "cmake.configureArgs": [
                     "-DCMAKE_EXPORT_COMPILE_COMMANDS=1"
                 ],
                 "clangd.arguments": [
                     "--background-index",
-                    "--compile-commands-dir=${workspaceFolder}/build/release",
+                    "--compile-commands-dir=${workspaceFolder}",
                     "-j=4",
                     "--clang-tidy",
-                    "--header-insertion=iwyu",
-                    "--completion-style=detailed"
+                    "--header-insertion=never",
+                    "--completion-style=detailed",
+                    "--query-driver=/usr/bin/c++,/usr/bin/g++,/usr/bin/clang++,/usr/bin/clang"
                 ],
 
                 "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
                 "editor.formatOnSave": true,
                 "cmake.configureOnOpen": true,
-                "cmake.buildDirectory": "${workspaceFolder}/build/release",
+                "cmake.buildDirectory": "${workspaceFolder}/build/debug",
                 "cmake.configureSettings": {
                     "CMAKE_TOOLCHAIN_FILE": "/opt/vcpkg/scripts/buildsystems/vcpkg.cmake"
                 },
@@ -48,7 +50,7 @@
     },
     "workspaceFolder": "/workspace",
     
-    "postCreateCommand": "codex --version && cmake --preset perf",
+    "postCreateCommand": "codex --version && cmake --preset debug && ln -sf build/debug/compile_commands.json compile_commands.json",
     "postStartCommand": "bash .devcontainer/init_scylla.sh",
     "runArgs": [
         "--privileged"
