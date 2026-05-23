@@ -79,12 +79,15 @@ void MsgService::sync_messages(uint64_t user_id, const im::SyncMessagesReq& req,
         return;
     }
 
-    auto messages = msg_scylla_dao_.GetMessagesForUser(user_id);
+    auto page = msg_scylla_dao_.GetMessagesForUserAfter(user_id, req.last_ack_msg_id(), req.limit());
 
     resp->set_success(true);
-    for (const auto& msg : messages) {
+    for (const auto& msg : page.messages) {
         *resp->add_messages() = msg;
     }
+    resp->set_next_ack_msg_id(page.next_ack_msg_id);
+    resp->set_has_more(page.has_more);
 
-    LOG_INFO("User[{}] synced {} messages (latest 500).", user_id, messages.size());
+    LOG_INFO("User[{}] synced {} messages after msg_id={}, next_ack_msg_id={}, has_more={}.", user_id,
+             page.messages.size(), req.last_ack_msg_id(), page.next_ack_msg_id, page.has_more);
 }

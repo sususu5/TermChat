@@ -49,10 +49,14 @@ message MessageAck {
 
 message SyncMessagesReq {
     uint64 user_id = 1;
+    uint64 last_ack_msg_id = 2;
+    uint32 limit = 3;
 }
 
 message SyncMessagesResp {
     bool success = 1;
     string error_msg = 2;
     repeated P2PMessage messages = 3;
+    uint64 next_ack_msg_id = 4;
+    bool has_more = 5;
 }

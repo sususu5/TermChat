@@ -12,6 +12,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include "protocol.pb.h"
 
@@ -85,6 +86,7 @@ private:
     std::string token_;
     uint64_t user_id_ = 0;
     std::string username_;
+    uint64_t last_synced_msg_id_ = 0;
 
     // Async Handling
     std::thread listener_thread_;
@@ -112,4 +114,5 @@ private:
 
     std::vector<im::FriendReqPush> pending_friend_requests_;
     std::unordered_map<uint64_t, std::vector<im::P2PMessage>> p2p_chat_history_;
+    std::unordered_map<uint64_t, std::unordered_set<uint64_t>> p2p_msg_ids_;
 };

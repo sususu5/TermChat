@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS im.messages (
   PRIMARY KEY (conversation_id, message_id)
 );
 
-CREATE TABLE IF NOT EXISTS im.user_messages (
+CREATE TABLE IF NOT EXISTS im.user_messages_by_id (
   user_id bigint,
   message_id bigint,
   sender_id bigint,
@@ -34,8 +34,8 @@ CREATE TABLE IF NOT EXISTS im.user_messages (
   content_type int,
   content blob,
   timestamp bigint,
-  PRIMARY KEY (user_id, timestamp, message_id)
-) WITH CLUSTERING ORDER BY (timestamp DESC, message_id ASC);
+  PRIMARY KEY (user_id, message_id)
+) WITH CLUSTERING ORDER BY (message_id ASC);
 CQL
 
 echo "[scylla] init done."
