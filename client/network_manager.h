@@ -95,6 +95,7 @@ private:
     std::atomic<bool> running_{false};
 
     std::mutex mutex_;
+    std::mutex send_mutex_;
     std::condition_variable cv_response_;
     uint64_t next_seq_ = 1;
     std::unordered_map<uint64_t, im::Envelope> response_by_seq_;

@@ -123,10 +123,14 @@ HomePage BuildHomePage(const std::function<void()>& on_logout, HomePageState* st
         });
 
     // Chat Panel
-    auto chat_panel =
-        BuildChatPanel(state->current_chat_friend_id, state->current_chat_friend_name, [state](const std::string& msg) {
-            std::string err;
-            NetworkManager::GetInstance().SendP2PMessage(state->current_chat_friend_id, msg, err);
+    auto chat_panel = BuildChatPanel(
+        [state] { return state->current_chat_friend_id; }, [state] { return state->current_chat_friend_name; },
+        [state](const std::string& msg, std::string& err) {
+            if (state->current_chat_friend_id == 0) {
+                err = "Select a chat first.";
+                return false;
+            }
+            return NetworkManager::GetInstance().SendP2PMessage(state->current_chat_friend_id, msg, err);
         });
 
     auto empty_layout = Container::Vertical({});

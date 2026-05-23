@@ -12,10 +12,12 @@ struct ChatState {
     int selected = 0;
     std::vector<std::string> dummy_entries;
     std::string content;
+    std::string hint;
 };
 
-ChatPanel BuildChatPanel(const uint64_t& friend_id, const std::string& friend_name,
-                         const std::function<void(const std::string&)>& on_send) {
+ChatPanel BuildChatPanel(const std::function<uint64_t()>& get_friend_id,
+                         const std::function<std::string()>& get_friend_name,
+                         const std::function<bool(const std::string&, std::string&)>& on_send) {
     auto state = std::make_shared<ChatState>();
     auto input_content = Input(&state->content, "Type a message...");
 
@@ -25,13 +27,19 @@ ChatPanel BuildChatPanel(const uint64_t& friend_id, const std::string& friend_na
             if (state->content.empty()) {
                 return;
             }
-            on_send(state->content);
-            state->content.clear();
+            std::string error_msg;
+            if (on_send(state->content, error_msg)) {
+                state->content.clear();
+                state->hint.clear();
+            } else {
+                state->hint = error_msg.empty() ? "Message send failed." : error_msg;
+            }
         },
         MakeButtonStyle());
 
     MenuOption option;
-    option.entries_option.transform = [state, &friend_id](const EntryState& entry_state) {
+    option.entries_option.transform = [get_friend_id](const EntryState& entry_state) {
+        const auto friend_id = get_friend_id();
         const auto& history = NetworkManager::GetInstance().GetP2PHistory(friend_id);
         if (entry_state.index >= (int)history.size()) {
             return text("");
@@ -65,7 +73,8 @@ ChatPanel BuildChatPanel(const uint64_t& friend_id, const std::string& friend_na
         btn_layout,
     });
 
-    auto renderer = Renderer(layout, [state, &friend_id, &friend_name, input_content, btn_send, msg_menu] {
+    auto renderer = Renderer(layout, [state, get_friend_id, get_friend_name, input_content, btn_send, msg_menu] {
+        const auto friend_id = get_friend_id();
         if (friend_id != 0) {
             const auto& history = NetworkManager::GetInstance().GetP2PHistory(friend_id);
             if (state->dummy_entries.size() != history.size()) {
@@ -82,10 +91,11 @@ ChatPanel BuildChatPanel(const uint64_t& friend_id, const std::string& friend_na
         }
 
         return vbox({
-                   text("Chat with " + friend_name) | bold | center,
+                   text("Chat with " + get_friend_name()) | bold | center,
                    separator(),
                    msg_menu->Render() | vscroll_indicator | yframe | flex,
                    separator(),
+                   state->hint.empty() ? text("") : text(state->hint) | color(Color::Red),
                    hbox({
                        input_content->Render() | flex,
                        btn_send->Render(),

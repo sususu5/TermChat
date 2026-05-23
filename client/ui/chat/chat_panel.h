@@ -10,5 +10,6 @@ struct ChatPanel {
     ftxui::Component renderer;
 };
 
-ChatPanel BuildChatPanel(const uint64_t& friend_id, const std::string& friend_name,
-                         const std::function<void(const std::string&)>& on_send);
+ChatPanel BuildChatPanel(const std::function<uint64_t()>& get_friend_id,
+                         const std::function<std::string()>& get_friend_name,
+                         const std::function<bool(const std::string&, std::string&)>& on_send);

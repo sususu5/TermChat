@@ -57,6 +57,7 @@ bool NetworkManager::SendEnvelope(const im::Envelope& env) {
     packet.append(reinterpret_cast<char*>(&len), 4);
     packet.append(serialized);
 
+    std::lock_guard<std::mutex> send_lock(send_mutex_);
     size_t sent_total = 0;
     while (sent_total < packet.size()) {
         const auto sent = send(sock_, packet.data() + sent_total, packet.size() - sent_total, 0);
@@ -484,13 +485,18 @@ bool NetworkManager::SendP2PMessage(uint64_t receiver_id, const std::string& con
         const auto& resp = resp_env.msg_ack();
         if (resp.success()) {
             req.set_msg_id(resp.msg_id());
+            bool inserted = false;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 pending_p2p_messages_.erase(env.seq());
                 MergeMessageAckLocked(req.msg_id(), resp.status());
-                if (p2p_msg_ids_[receiver_id].insert(req.msg_id()).second) {
+                inserted = p2p_msg_ids_[receiver_id].insert(req.msg_id()).second;
+                if (inserted) {
                     p2p_chat_history_[receiver_id].push_back(req);
                 }
+            }
+            if (inserted && on_message_callback_) {
+                on_message_callback_(req);
             }
             return true;
         } else {

@@ -31,7 +31,7 @@ The diagram shows the main flow, not a strict total order. After `ServerReceived
 
 ## ACK Merge Rule
 
-ACKs are handled as idempotent state updates instead of overwriting a single status enum. This prevents state regression when ACKs arrive out of order.
+ACKs are handled as independent state updates instead of overwriting a single status enum. This prevents state regression when ACKs arrive out of order.
 
 ```text
 ACK_STATUS_RECEIVED  -> server_received = true
