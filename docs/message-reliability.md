@@ -6,15 +6,15 @@ TermChat uses an explicit message state machine to separate network acceptance, 
 
 ```mermaid
 stateDiagram-v2
-    [*] --> ClientSent: client sends P2PMessage\nwith client_msg_id
-    ClientSent --> ServerReceived: server validates auth\nand generates msg_id
-    ServerReceived --> Persisted: async writer flushes\nmessage to ScyllaDB
-    ServerReceived --> PushEnqueued: receiver is online\npush queued to connection
-    PushEnqueued --> ClientDelivered: receiver handles\nCMD_P2P_MSG_PUSH
-    ClientDelivered --> SenderNotified: receiver sends\nMessageAck(DELIVERED)
-    Persisted --> SenderNotified: server sends\nMessageAck(PERSISTED)
-    ServerReceived --> RetryDeduped: duplicate client_msg_id\nreturns existing msg_id/status
-    ClientSent --> ClientSent: ACK timeout\nclient retransmits
+    [*] --> ClientSent: send
+    ClientSent --> ServerReceived: accept
+    ServerReceived --> Persisted: persist
+    ServerReceived --> PushEnqueued: enqueue
+    PushEnqueued --> ClientDelivered: push
+    Persisted --> SenderNotified: ACK PERSISTED
+    ClientDelivered --> SenderNotified: ACK DELIVERED
+    ClientSent --> ClientSent: retry
+    ServerReceived --> RetryDeduped: dedup
 ```
 
 ## States
@@ -34,4 +34,3 @@ stateDiagram-v2
 - **Sender retry after timeout**: the client retransmits the same `client_msg_id`. The server uses the dedup table to return the original `msg_id` and current status instead of creating duplicate messages.
 - **Push succeeds but persistence is slower**: online delivery and durable storage are decoupled. The state machine exposes both stages, which helps diagnose whether latency comes from network push or ScyllaDB writes.
 - **Read receipts intentionally omitted**: the system focuses on reliable delivery and synchronization. `READ` is kept as an extensible protocol state, but the current implementation does not require UI-level read tracking.
-
