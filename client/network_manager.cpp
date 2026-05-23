@@ -84,6 +84,34 @@ uint64_t NetworkManager::GenerateClientMsgId() {
     return (static_cast<uint64_t>(now_ms) << 20) | (NextSeq() & 0xFFFFFULL);
 }
 
+void NetworkManager::MergeMessageAckLocked(uint64_t msg_id, im::MessageAckStatus status) {
+    if (msg_id == 0) {
+        return;
+    }
+
+    auto& state = p2p_msg_status_[msg_id];
+    switch (status) {
+        case im::ACK_STATUS_RECEIVED:
+            state.server_received = true;
+            break;
+        case im::ACK_STATUS_PERSISTED:
+            state.server_received = true;
+            state.persisted = true;
+            break;
+        case im::ACK_STATUS_ENQUEUED:
+            state.server_received = true;
+            state.push_enqueued = true;
+            break;
+        case im::ACK_STATUS_DELIVERED:
+            state.server_received = true;
+            state.push_enqueued = true;
+            state.delivered = true;
+            break;
+        default:
+            break;
+    }
+}
+
 bool NetworkManager::WaitForResponse(uint64_t seq, im::Envelope& response, im::CommandType expected_cmd,
                                      std::chrono::milliseconds timeout) {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -213,7 +241,7 @@ void NetworkManager::ListenerLoop() {
             const auto& ack = env.msg_ack();
             if (ack.success()) {
                 std::lock_guard<std::mutex> lock(mutex_);
-                p2p_msg_status_[ack.msg_id()] = ack.status();
+                MergeMessageAckLocked(ack.msg_id(), ack.status());
             }
         } else {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -459,7 +487,7 @@ bool NetworkManager::SendP2PMessage(uint64_t receiver_id, const std::string& con
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 pending_p2p_messages_.erase(env.seq());
-                p2p_msg_status_[req.msg_id()] = resp.status();
+                MergeMessageAckLocked(req.msg_id(), resp.status());
                 if (p2p_msg_ids_[receiver_id].insert(req.msg_id()).second) {
                     p2p_chat_history_[receiver_id].push_back(req);
                 }

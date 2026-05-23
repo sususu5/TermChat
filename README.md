@@ -56,7 +56,7 @@
 
 ## 📚 Design Docs
 
-- [Message Reliability State Machine](docs/message-reliability.md)
+- [Message Reliability Model](docs/message-reliability.md)
 
 ---
 

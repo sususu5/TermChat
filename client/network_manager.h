@@ -69,6 +69,7 @@ private:
                          std::chrono::milliseconds timeout);
     uint64_t NextSeq();
     uint64_t GenerateClientMsgId();
+    void MergeMessageAckLocked(uint64_t msg_id, im::MessageAckStatus status);
     void ListenerLoop();
     void HeartbeatLoop();
     void ClearAuth();
@@ -104,6 +105,13 @@ private:
         int attempts = 0;
     };
 
+    struct MessageDeliveryState {
+        bool server_received = false;
+        bool persisted = false;
+        bool push_enqueued = false;
+        bool delivered = false;
+    };
+
     std::unordered_map<uint64_t, PendingP2PMessage> pending_p2p_messages_;
 
     // Callbacks & Storage
@@ -115,5 +123,5 @@ private:
     std::vector<im::FriendReqPush> pending_friend_requests_;
     std::unordered_map<uint64_t, std::vector<im::P2PMessage>> p2p_chat_history_;
     std::unordered_map<uint64_t, std::unordered_set<uint64_t>> p2p_msg_ids_;
-    std::unordered_map<uint64_t, im::MessageAckStatus> p2p_msg_status_;
+    std::unordered_map<uint64_t, MessageDeliveryState> p2p_msg_status_;
 };
