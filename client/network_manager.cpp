@@ -197,6 +197,24 @@ void NetworkManager::ListenerLoop() {
             if (inserted && on_message_callback_) {
                 on_message_callback_(msg);
             }
+            im::MessageAck ack;
+            ack.set_msg_id(msg.msg_id());
+            ack.set_success(true);
+            ack.set_status(im::ACK_STATUS_DELIVERED);
+            ack.set_sender_id(msg.sender_id());
+            ack.set_receiver_id(msg.receiver_id());
+
+            im::Envelope ack_env;
+            ack_env.set_cmd(im::CMD_MSG_ACK);
+            ack_env.set_timestamp(time(nullptr));
+            *ack_env.mutable_msg_ack() = ack;
+            SendEnvelope(ack_env);
+        } else if (env.cmd() == im::CMD_MSG_ACK && env.seq() == 0 && env.has_msg_ack()) {
+            const auto& ack = env.msg_ack();
+            if (ack.success()) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                p2p_msg_status_[ack.msg_id()] = ack.status();
+            }
         } else {
             std::lock_guard<std::mutex> lock(mutex_);
             response_by_seq_[env.seq()] = env;
@@ -293,6 +311,7 @@ void NetworkManager::ClearAuth() {
         last_synced_msg_id_ = 0;
         p2p_chat_history_.clear();
         p2p_msg_ids_.clear();
+        p2p_msg_status_.clear();
         pending_p2p_messages_.clear();
         response_by_seq_.clear();
         pending_friend_requests_.clear();
@@ -440,6 +459,7 @@ bool NetworkManager::SendP2PMessage(uint64_t receiver_id, const std::string& con
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 pending_p2p_messages_.erase(env.seq());
+                p2p_msg_status_[req.msg_id()] = resp.status();
                 if (p2p_msg_ids_[receiver_id].insert(req.msg_id()).second) {
                     p2p_chat_history_[receiver_id].push_back(req);
                 }

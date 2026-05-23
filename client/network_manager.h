@@ -115,4 +115,5 @@ private:
     std::vector<im::FriendReqPush> pending_friend_requests_;
     std::unordered_map<uint64_t, std::vector<im::P2PMessage>> p2p_chat_history_;
     std::unordered_map<uint64_t, std::unordered_set<uint64_t>> p2p_msg_ids_;
+    std::unordered_map<uint64_t, im::MessageAckStatus> p2p_msg_status_;
 };

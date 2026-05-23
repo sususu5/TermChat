@@ -89,6 +89,9 @@ void ProtobufHandler::Dispatch(const im::Envelope& request, im::Envelope& respon
         case im::CMD_P2P_MSG_REQ:
             HandleP2PMsg(request, response);
             break;
+        case im::CMD_MSG_ACK:
+            HandleMessageAck(request, response);
+            break;
         case im::CMD_SYNC_MSGS_REQ:
             HandleSyncMessages(request, response);
             break;
@@ -249,6 +252,24 @@ void ProtobufHandler::HandleP2PMsg(const im::Envelope& request, im::Envelope& re
     msg_ack.set_ref_seq(request.seq());
     response.set_cmd(im::CMD_MSG_ACK);
     response.mutable_msg_ack()->CopyFrom(msg_ack);
+}
+
+void ProtobufHandler::HandleMessageAck(const im::Envelope& request, im::Envelope& response) {
+    if (RequireAuth(response, im::CMD_MSG_ACK)) return;
+
+    response.set_cmd(im::CMD_MSG_ACK);
+    if (!request.has_msg_ack()) {
+        auto* resp = response.mutable_msg_ack();
+        resp->set_success(false);
+        resp->set_error_msg("Invalid request: missing message ack payload");
+        resp->set_status(im::ACK_STATUS_UNKNOWN);
+        return;
+    }
+
+    im::MessageAck ack_resp;
+    msg_service_->acknowledge_message(CurrentUserId(), request.msg_ack(), &ack_resp);
+    ack_resp.set_ref_seq(request.seq());
+    response.mutable_msg_ack()->CopyFrom(ack_resp);
 }
 
 void ProtobufHandler::HandleSyncMessages(const im::Envelope& request, im::Envelope& response) {

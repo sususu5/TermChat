@@ -24,7 +24,9 @@ enum MessageAckStatus {
     ACK_STATUS_UNKNOWN   = 0;
     ACK_STATUS_RECEIVED  = 1; // Accepted by the server.
     ACK_STATUS_PERSISTED = 2; // Persisted to durable storage.
-    ACK_STATUS_DELIVERED = 3; // Enqueued to the receiver's online connection.
+    ACK_STATUS_ENQUEUED  = 3; // Enqueued to the receiver's online connection.
+    ACK_STATUS_DELIVERED = 4; // Receiver client acknowledged receipt.
+    ACK_STATUS_READ      = 5; // Receiver user read the message.
 }
 
 message P2PMessage {
@@ -45,6 +47,8 @@ message MessageAck {
     bool success = 3;
     string error_msg = 4;
     MessageAckStatus status = 5;
+    uint64 sender_id = 6;
+    uint64 receiver_id = 7;
 }
 
 message SyncMessagesReq {

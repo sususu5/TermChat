@@ -1,7 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <thread>
+#include <vector>
 #include "../core/mpsc_queue.h"
 #include "message_service.pb.h"
 #include "msg_scylla_dao.h"
@@ -15,15 +17,23 @@ public:
 
     void Start();
     void Stop();
-    void Enqueue(im::P2PMessage msg);
+    using PersistCallback = std::function<void(const im::P2PMessage& msg, bool success)>;
+    void Enqueue(im::P2PMessage msg, PersistCallback callback = {});
 
 private:
+    struct QueueItem {
+        im::P2PMessage msg;
+        PersistCallback callback;
+    };
+
     AsyncMsgWriter() = default;
     ~AsyncMsgWriter() { Stop(); };
 
     void WorkerLoop();
+    bool PersistBatch(const std::vector<QueueItem>& batch_buffer);
+    void NotifyCallbacks(const std::vector<QueueItem>& batch_buffer, bool success);
 
-    MPSCQueue<im::P2PMessage> queue_;
+    MPSCQueue<QueueItem> queue_;
     std::thread worker_;
     std::atomic<bool> running_{false};
     MsgScyllaDao dao_;

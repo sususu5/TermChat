@@ -1,6 +1,7 @@
 #include "msg_scylla_dao.h"
 #include <cassandra.h>
 #include <algorithm>
+#include <chrono>
 #include "../log/log.h"
 #include "../pool/scylla_session.h"
 #include "../utils/id_generator.h"
@@ -14,6 +15,13 @@ std::string CassFutureError(CassFuture* future) {
         return "unknown error";
     }
     return std::string(message, message_length);
+}
+}  // namespace
+
+namespace {
+int64_t NowMillis() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+        .count();
 }
 }  // namespace
 
@@ -237,4 +245,82 @@ MsgScyllaDao::MessagePage MsgScyllaDao::GetMessagesForUserAfter(uint64_t user_id
         page.next_ack_msg_id = last_ack_msg_id;
     }
     return page;
+}
+
+MsgScyllaDao::ClientMsgDedupEntry MsgScyllaDao::GetClientMsgDedup(uint64_t sender_id, uint64_t client_msg_id) {
+    ClientMsgDedupEntry entry;
+    auto* session = ScyllaSession::Instance()->Session();
+    if (!session || sender_id == 0 || client_msg_id == 0) return entry;
+
+    constexpr const char* k_select = "SELECT server_msg_id, receiver_id, status "
+                                     "FROM im.client_msg_dedup "
+                                     "WHERE sender_id = ? AND client_msg_id = ?;";
+
+    CassStatement* statement = cass_statement_new(k_select, 2);
+    cass_statement_bind_int64(statement, 0, static_cast<cass_int64_t>(sender_id));
+    cass_statement_bind_int64(statement, 1, static_cast<cass_int64_t>(client_msg_id));
+
+    CassFuture* future = cass_session_execute(session, statement);
+    cass_future_wait(future);
+
+    if (cass_future_error_code(future) == CASS_OK) {
+        const CassResult* cass_result = cass_future_get_result(future);
+        CassIterator* iterator = cass_iterator_from_result(cass_result);
+        if (cass_iterator_next(iterator)) {
+            const CassRow* row = cass_iterator_get_row(iterator);
+            cass_int64_t server_msg_id = 0;
+            cass_int64_t receiver_id = 0;
+            cass_int32_t status = 0;
+            cass_value_get_int64(cass_row_get_column(row, 0), &server_msg_id);
+            cass_value_get_int64(cass_row_get_column(row, 1), &receiver_id);
+            cass_value_get_int32(cass_row_get_column(row, 2), &status);
+
+            entry.found = true;
+            entry.server_msg_id = static_cast<uint64_t>(server_msg_id);
+            entry.receiver_id = static_cast<uint64_t>(receiver_id);
+            entry.status = static_cast<im::MessageAckStatus>(status);
+        }
+        cass_iterator_free(iterator);
+        cass_result_free(cass_result);
+    } else {
+        LOG_ERROR("Scylla client_msg_dedup query failed: {}", CassFutureError(future));
+    }
+
+    cass_future_free(future);
+    cass_statement_free(statement);
+    return entry;
+}
+
+bool MsgScyllaDao::UpsertClientMsgDedup(uint64_t sender_id, uint64_t client_msg_id, uint64_t server_msg_id,
+                                        uint64_t receiver_id, im::MessageAckStatus status) {
+    auto* session = ScyllaSession::Instance()->Session();
+    if (!session || sender_id == 0 || client_msg_id == 0 || server_msg_id == 0) return false;
+
+    constexpr const char* k_upsert =
+        "INSERT INTO im.client_msg_dedup (sender_id, client_msg_id, server_msg_id, receiver_id, status, created_at, "
+        "updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?);";
+
+    const auto now_ms = NowMillis();
+    CassStatement* statement = cass_statement_new(k_upsert, 7);
+    cass_statement_bind_int64(statement, 0, static_cast<cass_int64_t>(sender_id));
+    cass_statement_bind_int64(statement, 1, static_cast<cass_int64_t>(client_msg_id));
+    cass_statement_bind_int64(statement, 2, static_cast<cass_int64_t>(server_msg_id));
+    cass_statement_bind_int64(statement, 3, static_cast<cass_int64_t>(receiver_id));
+    cass_statement_bind_int32(statement, 4, static_cast<cass_int32_t>(status));
+    cass_statement_bind_int64(statement, 5, static_cast<cass_int64_t>(now_ms));
+    cass_statement_bind_int64(statement, 6, static_cast<cass_int64_t>(now_ms));
+
+    CassFuture* future = cass_session_execute(session, statement);
+    cass_future_wait(future);
+
+    bool ok = true;
+    if (cass_future_error_code(future) != CASS_OK) {
+        LOG_ERROR("Scylla client_msg_dedup upsert failed: {}", CassFutureError(future));
+        ok = false;
+    }
+
+    cass_future_free(future);
+    cass_statement_free(statement);
+    return ok;
 }

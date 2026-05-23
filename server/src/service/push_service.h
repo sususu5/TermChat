@@ -23,6 +23,7 @@ public:
     void push_friend_status(uint64_t sender_id, uint64_t receiver_id, const std::string& receiver_name,
                             const im::FriendAction& action);
     bool push_p2p_message(const im::P2PMessage& msg);
+    bool push_message_ack(uint64_t user_id, const im::MessageAck& ack);
 
     // Generic push
     void push_to_user(uint64_t user_id, std::string data);

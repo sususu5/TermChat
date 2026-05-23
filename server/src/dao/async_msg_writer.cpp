@@ -21,10 +21,29 @@ void AsyncMsgWriter::Stop() {
     }
 }
 
-void AsyncMsgWriter::Enqueue(im::P2PMessage msg) { queue_.enqueue(std::move(msg)); }
+void AsyncMsgWriter::Enqueue(im::P2PMessage msg, PersistCallback callback) {
+    queue_.enqueue(QueueItem{std::move(msg), std::move(callback)});
+}
+
+bool AsyncMsgWriter::PersistBatch(const std::vector<QueueItem>& batch_buffer) {
+    std::vector<im::P2PMessage> messages;
+    messages.reserve(batch_buffer.size());
+    for (const auto& item : batch_buffer) {
+        messages.push_back(item.msg);
+    }
+    return dao_.InsertBatch(messages);
+}
+
+void AsyncMsgWriter::NotifyCallbacks(const std::vector<QueueItem>& batch_buffer, bool success) {
+    for (const auto& item : batch_buffer) {
+        if (item.callback) {
+            item.callback(item.msg, success);
+        }
+    }
+}
 
 void AsyncMsgWriter::WorkerLoop() {
-    std::vector<im::P2PMessage> batch_buffer;
+    std::vector<QueueItem> batch_buffer;
     batch_buffer.reserve(kBatchSize);
 
     const int kMaxRetries = 3;
@@ -40,7 +59,7 @@ void AsyncMsgWriter::WorkerLoop() {
             bool success = false;
             int retry_count = 0;
             while (retry_count <= kMaxRetries) {
-                if (dao_.InsertBatch(batch_buffer)) {
+                if (PersistBatch(batch_buffer)) {
                     success = true;
                     break;
                 }
@@ -55,6 +74,7 @@ void AsyncMsgWriter::WorkerLoop() {
             if (!success) {
                 LOG_ERROR("Failed to insert batch of {} messages.", count);
             }
+            NotifyCallbacks(batch_buffer, success);
             batch_buffer.clear();
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -64,9 +84,11 @@ void AsyncMsgWriter::WorkerLoop() {
     while (!queue_.empty()) {
         auto count = queue_.dequeue_bulk(std::back_inserter(batch_buffer), kBatchSize);
         if (count > 0) {
-            if (!dao_.InsertBatch(batch_buffer)) {
+            const bool success = PersistBatch(batch_buffer);
+            if (!success) {
                 LOG_ERROR("Failed to insert batch of {} messages.", count);
             }
+            NotifyCallbacks(batch_buffer, success);
             batch_buffer.clear();
         }
     }

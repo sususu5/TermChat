@@ -127,7 +127,7 @@ class TestP2PMessage(unittest.TestCase):
         ack_env = self._recv_msg(sock_a)
         self.assertEqual(ack_env.cmd, protocol_pb2.CMD_MSG_ACK)
         self.assertTrue(ack_env.msg_ack.success, f"Error: {ack_env.msg_ack.error_msg}")
-        self.assertEqual(ack_env.msg_ack.status, message_service_pb2.ACK_STATUS_DELIVERED)
+        self.assertEqual(ack_env.msg_ack.status, message_service_pb2.ACK_STATUS_ENQUEUED)
         self.assertGreater(ack_env.msg_ack.msg_id, 0)
         msg_id = ack_env.msg_ack.msg_id
         print("A received ACK")
@@ -164,7 +164,7 @@ class TestP2PMessage(unittest.TestCase):
         ack_env_b = self._recv_msg(sock_b)
         self.assertEqual(ack_env_b.cmd, protocol_pb2.CMD_MSG_ACK)
         self.assertTrue(ack_env_b.msg_ack.success)
-        self.assertEqual(ack_env_b.msg_ack.status, message_service_pb2.ACK_STATUS_DELIVERED)
+        self.assertEqual(ack_env_b.msg_ack.status, message_service_pb2.ACK_STATUS_ENQUEUED)
         self.assertGreater(ack_env_b.msg_ack.msg_id, 0)
         reply_msg_id = ack_env_b.msg_ack.msg_id
         print("B received ACK")

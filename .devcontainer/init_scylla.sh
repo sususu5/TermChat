@@ -36,6 +36,17 @@ CREATE TABLE IF NOT EXISTS im.user_messages_by_id (
   timestamp bigint,
   PRIMARY KEY (user_id, message_id)
 ) WITH CLUSTERING ORDER BY (message_id ASC);
+
+CREATE TABLE IF NOT EXISTS im.client_msg_dedup (
+  sender_id bigint,
+  client_msg_id bigint,
+  server_msg_id bigint,
+  receiver_id bigint,
+  status int,
+  created_at bigint,
+  updated_at bigint,
+  PRIMARY KEY (sender_id, client_msg_id)
+);
 CQL
 
 echo "[scylla] init done."

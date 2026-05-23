@@ -81,6 +81,16 @@ bool PushService::push_p2p_message(const im::P2PMessage& msg) {
     return send_envelope(msg.receiver_id(), envelope);
 }
 
+bool PushService::push_message_ack(uint64_t user_id, const im::MessageAck& ack) {
+    im::Envelope envelope;
+    envelope.set_seq(0);
+    envelope.set_cmd(im::CMD_MSG_ACK);
+    envelope.set_timestamp(time(nullptr));
+    envelope.mutable_msg_ack()->CopyFrom(ack);
+
+    return send_envelope(user_id, envelope);
+}
+
 void PushService::push_to_user(uint64_t user_id, std::string data) {
     TcpConnection* conn = nullptr;
     {
