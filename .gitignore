@@ -38,3 +38,5 @@ perf.data
 perf.svg
 perf.data.old
 tests/__pycache__
+benchmark-results/*
+!benchmark-results/.gitkeep

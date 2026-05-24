@@ -110,9 +110,9 @@ python3 tests/benchmark_im.py > ./log/benchmark_im.log 2>&1
 # Generate flamegraph
 perf script | stackcollapse-perf.pl | flamegraph.pl > perf.svg
 
-# Test Smoke Test
+# Go performance benchmark
 go mod tidy
-go run tests/smoke.go -addr 127.0.0.1:1316 -n 10000
+go run ./tests/perf -addr 127.0.0.1:1316 -n 10000 -out benchmark-results/dev-single-conn
 
 # Run Client (FTXUI)
 ./build/debug/client/client
