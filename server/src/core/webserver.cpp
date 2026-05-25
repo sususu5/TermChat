@@ -1,7 +1,37 @@
 #include "webserver.h"
+#include <cerrno>
+#include <cstring>
 #include <cstdlib>
+#include <format>
 #include "../log/log.h"
 #include "../pool/scylla_session.h"
+
+namespace {
+std::string ErrnoMessage(int err) {
+    if (err == 0) {
+        return "none";
+    }
+    return std::string(std::strerror(err));
+}
+
+std::string EpollEventSummary(uint32_t events) {
+    std::string summary;
+    auto append = [&summary](const char* name) {
+        if (!summary.empty()) {
+            summary += "|";
+        }
+        summary += name;
+    };
+    if (events & EPOLLIN) append("EPOLLIN");
+    if (events & EPOLLOUT) append("EPOLLOUT");
+    if (events & EPOLLRDHUP) append("EPOLLRDHUP");
+    if (events & EPOLLHUP) append("EPOLLHUP");
+    if (events & EPOLLERR) append("EPOLLERR");
+    if (events & EPOLLONESHOT) append("EPOLLONESHOT");
+    if (events & EPOLLET) append("EPOLLET");
+    return summary.empty() ? "none" : summary;
+}
+}  // namespace
 
 Webserver::Webserver(int port, int trig_mode, int timeout_ms, int sql_port, const char* sql_user, const char* sql_pwd,
                      const char* db_name, int conn_pool_num, int thread_num, bool open_log, int log_level,
@@ -43,7 +73,7 @@ Webserver::Webserver(int port, int trig_mode, int timeout_ms, int sql_port, cons
     // Initialize timer callback
     timer_->SetCallBack([this](int fd) {
         if (connections_.count(fd)) {
-            CloseConn_(connections_[fd].get());
+            CloseConn_(connections_[fd].get(), "idle timeout");
         }
     });
 
@@ -121,7 +151,7 @@ void Webserver::Start() {
             }
             // If the file descriptor is an error, close the connection
             else if (events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
-                CloseConn_(connections_.at(fd).get());
+                CloseConn_(connections_.at(fd).get(), "epoll event: " + EpollEventSummary(events));
             }
             // If the file descriptor is readable, deal with the read event
             else if (events & EPOLLIN) {
@@ -148,9 +178,10 @@ void Webserver::SendError_(int fd, const char* info) {
     close(fd);
 }
 
-void Webserver::CloseConn_(TcpConnection* client) {
+void Webserver::CloseConn_(TcpConnection* client, const std::string& reason) {
     assert(client);
-    LOG_INFO("Client[{}] quit!", client->get_fd());
+    LOG_INFO("Client[{}] closing, reason={}, to_write_bytes={}, keep_alive={}", client->get_fd(), reason,
+             client->to_write_bytes(), client->is_keep_alive());
     epoller_->delFd(client->get_fd());
     client->close_conn();
 }
@@ -213,7 +244,8 @@ void Webserver::OnRead_(TcpConnection* client) {
     int readErrno = 0;
     ret = client->read(&readErrno);
     if (ret <= 0 && readErrno != EAGAIN) {
-        CloseConn_(client);
+        CloseConn_(client, std::format("read failed: ret={}, errno={}, error={}", ret, readErrno,
+                                       ErrnoMessage(readErrno)));
         return;
     }
     OnProcess_(client);
@@ -239,7 +271,8 @@ void Webserver::OnWrite_(TcpConnection* client) {
     int ret = -1;
     int writeErrno = 0;
     ret = client->write(&writeErrno);
-    if (client->to_write_bytes() == 0) {
+    const auto remaining = client->to_write_bytes();
+    if (remaining == 0) {
         // Write completely
         if (client->is_keep_alive()) {
             // If the connection is persistent, modify the event to EPOLLIN
@@ -257,7 +290,8 @@ void Webserver::OnWrite_(TcpConnection* client) {
             return;
         }
     }
-    CloseConn_(client);
+    CloseConn_(client, std::format("write close path: ret={}, errno={}, error={}, remaining={}, keep_alive={}", ret,
+                                   writeErrno, ErrnoMessage(writeErrno), remaining, client->is_keep_alive()));
 }
 
 bool Webserver::InitSocket_() {

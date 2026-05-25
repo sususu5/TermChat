@@ -48,17 +48,22 @@ type LatencyRecord struct {
 }
 
 type Summary struct {
-	Scenario      string             `json:"scenario"`
-	TotalMessages int                `json:"total_messages"`
-	Success       int                `json:"success"`
-	Failed        int                `json:"failed"`
-	SkippedPushes int                `json:"skipped_pushes"`
-	DurationMS    int64              `json:"duration_ms"`
-	QPS           float64            `json:"qps"`
-	LatencyMS     map[string]float64 `json:"latency_ms"`
-	Errors        map[string]int     `json:"errors"`
-	StartedAt     string             `json:"started_at"`
-	FinishedAt    string             `json:"finished_at"`
+	Scenario          string             `json:"scenario"`
+	Valid             bool               `json:"valid"`
+	FatalError        string             `json:"fatal_error,omitempty"`
+	FirstFailureSeq   uint64             `json:"first_failure_seq,omitempty"`
+	RequestedMessages int                `json:"requested_messages"`
+	CompletedMessages int                `json:"completed_messages"`
+	Success           int                `json:"success"`
+	Failed            int                `json:"failed"`
+	SkippedPushes     int                `json:"skipped_pushes"`
+	DurationMS        int64              `json:"duration_ms"`
+	AttemptedQPS      float64            `json:"attempted_qps"`
+	SuccessQPS        float64            `json:"success_qps"`
+	LatencyMS         map[string]float64 `json:"latency_ms"`
+	Errors            map[string]int     `json:"errors"`
+	StartedAt         string             `json:"started_at"`
+	FinishedAt        string             `json:"finished_at"`
 }
 
 type BenchClient struct {
@@ -130,6 +135,9 @@ func main() {
 
 	records := make([]LatencyRecord, 0, *totalMessages)
 	errorsByType := map[string]int{}
+	valid := true
+	fatalError := ""
+	var firstFailureSeq uint64
 	benchStart := time.Now()
 	for i := 0; i < *totalMessages; i++ {
 		record, err := client.sendMeasuredP2P(*receiverID, payload)
@@ -137,12 +145,20 @@ func main() {
 			errorsByType[classifyError(err)]++
 			record.Error = err.Error()
 			record.Success = false
+			if isFatalConnectionError(err) {
+				valid = false
+				fatalError = err.Error()
+				firstFailureSeq = record.Seq
+				records = append(records, record)
+				break
+			}
 		}
 		records = append(records, record)
 	}
 	duration := time.Since(benchStart)
 
-	summary := buildSummary(scenario.Name, records, errorsByType, client.skippedPushes, duration, startedAt, time.Now().UTC())
+	summary := buildSummary(scenario.Name, *totalMessages, records, errorsByType, client.skippedPushes, duration,
+		startedAt, time.Now().UTC(), valid, fatalError, firstFailureSeq)
 	if err := writeJSON(filepath.Join(*outDir, "summary.json"), summary); err != nil {
 		log.Fatalf("write summary failed: %v", err)
 	}
@@ -154,8 +170,12 @@ func main() {
 	}
 
 	fmt.Printf("\n=== Results ===\n")
-	fmt.Printf("Success: %d/%d\n", summary.Success, summary.TotalMessages)
-	fmt.Printf("QPS: %.2f\n", summary.QPS)
+	fmt.Printf("Valid: %t\n", summary.Valid)
+	if summary.FatalError != "" {
+		fmt.Printf("Fatal error at seq %d: %s\n", summary.FirstFailureSeq, summary.FatalError)
+	}
+	fmt.Printf("Success: %d/%d completed, requested=%d\n", summary.Success, summary.CompletedMessages, summary.RequestedMessages)
+	fmt.Printf("Attempted QPS: %.2f, Success QPS: %.2f\n", summary.AttemptedQPS, summary.SuccessQPS)
 	fmt.Printf("p50/p95/p99/p999 latency: %.3f / %.3f / %.3f / %.3f ms\n",
 		summary.LatencyMS["p50"], summary.LatencyMS["p95"], summary.LatencyMS["p99"], summary.LatencyMS["p999"])
 	fmt.Printf("Results written to %s\n", *outDir)
@@ -313,33 +333,50 @@ func readPacket(rw *bufio.ReadWriter) (*pb.Envelope, error) {
 	return env, nil
 }
 
-func buildSummary(scenario string, records []LatencyRecord, errors map[string]int, skippedPushes int, duration time.Duration,
-	startedAt time.Time, finishedAt time.Time) Summary {
+func buildSummary(scenario string, requestedMessages int, records []LatencyRecord, errors map[string]int,
+	skippedPushes int, duration time.Duration, startedAt time.Time, finishedAt time.Time, valid bool,
+	fatalError string, firstFailureSeq uint64) Summary {
 	success := 0
 	latencies := make([]int64, 0, len(records))
+	firstSuccessSend := int64(0)
+	lastSuccessAck := int64(0)
 	for _, record := range records {
 		if record.Success {
 			success++
+			if firstSuccessSend == 0 {
+				firstSuccessSend = record.SendUnix
+			}
+			lastSuccessAck = record.AckUnix
 			latencies = append(latencies, record.LatencyUS)
 		}
 	}
 	failed := len(records) - success
-	qps := 0.0
+	attemptedQPS := 0.0
 	if duration > 0 {
-		qps = float64(len(records)) / duration.Seconds()
+		attemptedQPS = float64(len(records)) / duration.Seconds()
+	}
+	successQPS := 0.0
+	if success > 0 && lastSuccessAck > firstSuccessSend {
+		successWindowSeconds := float64(lastSuccessAck-firstSuccessSend) / float64(time.Second)
+		successQPS = float64(success) / successWindowSeconds
 	}
 	return Summary{
-		Scenario:      scenario,
-		TotalMessages: len(records),
-		Success:       success,
-		Failed:        failed,
-		SkippedPushes: skippedPushes,
-		DurationMS:    duration.Milliseconds(),
-		QPS:           qps,
-		LatencyMS:     latencyStatsMS(latencies),
-		Errors:        errors,
-		StartedAt:     startedAt.Format(time.RFC3339Nano),
-		FinishedAt:    finishedAt.Format(time.RFC3339Nano),
+		Scenario:          scenario,
+		Valid:             valid && failed == 0 && len(records) == requestedMessages,
+		FatalError:        fatalError,
+		FirstFailureSeq:   firstFailureSeq,
+		RequestedMessages: requestedMessages,
+		CompletedMessages: len(records),
+		Success:           success,
+		Failed:            failed,
+		SkippedPushes:     skippedPushes,
+		DurationMS:        duration.Milliseconds(),
+		AttemptedQPS:      attemptedQPS,
+		SuccessQPS:        successQPS,
+		LatencyMS:         latencyStatsMS(latencies),
+		Errors:            errors,
+		StartedAt:         startedAt.Format(time.RFC3339Nano),
+		FinishedAt:        finishedAt.Format(time.RFC3339Nano),
 	}
 }
 
@@ -420,7 +457,10 @@ func writeReport(path string, scenario Scenario, summary Summary) error {
 
 - Success: %d/%d
 - Failed: %d
-- QPS: %.2f
+- Valid: %t
+- Fatal error: %s
+- Attempted QPS: %.2f
+- Success QPS: %.2f
 - p50: %.3f ms
 - p95: %.3f ms
 - p99: %.3f ms
@@ -434,9 +474,12 @@ func writeReport(path string, scenario Scenario, summary Summary) error {
 		scenario.PayloadBytes,
 		scenario.Pattern,
 		summary.Success,
-		summary.TotalMessages,
+		summary.CompletedMessages,
 		summary.Failed,
-		summary.QPS,
+		summary.Valid,
+		summary.FatalError,
+		summary.AttemptedQPS,
+		summary.SuccessQPS,
 		summary.LatencyMS["p50"],
 		summary.LatencyMS["p95"],
 		summary.LatencyMS["p99"],
@@ -494,4 +537,17 @@ func classifyError(err error) string {
 	default:
 		return "unknown"
 	}
+}
+
+func isFatalConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "broken pipe") ||
+		strings.Contains(message, "connection reset") ||
+		strings.Contains(message, "connection refused") ||
+		strings.Contains(message, "use of closed network connection") ||
+		strings.Contains(message, "read length failed: eof") ||
+		strings.Contains(message, "read data failed: eof")
 }

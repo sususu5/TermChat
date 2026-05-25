@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <string>
 #include <unordered_map>
 #include "../pool/threadpool.h"
 #include "../service/auth_service.h"
@@ -35,7 +36,7 @@ private:
 
     void SendError_(int fd, const char* info);
     void ExtendTime_(TcpConnection* client);
-    void CloseConn_(TcpConnection* client);
+    void CloseConn_(TcpConnection* client, const std::string& reason);
 
     void OnRead_(TcpConnection* client);
     void OnWrite_(TcpConnection* client);

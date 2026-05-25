@@ -73,11 +73,11 @@ This project is configured with a **DevContainer**. This is the preferred way to
 
 **Build:**
 ```bash
-cmake --preset release && cmake --build build/release
+cmake --preset debug && cmake --build build/debug
 ```
 
 ```bash
-cmake --preset debug && cmake --build build/debug
+cmake --preset release && cmake --build build/release
 ```
 
 ```bash
