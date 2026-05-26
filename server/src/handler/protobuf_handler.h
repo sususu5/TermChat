@@ -47,6 +47,7 @@ private:
     // Message command handlers
     void HandleP2PMsg(const im::Envelope& request, im::Envelope& response);
     void HandleMessageAck(const im::Envelope& request, im::Envelope& response);
+    void HandleMessageAckBatch(const im::Envelope& request, im::Envelope& response);
     void HandleSyncMessages(const im::Envelope& request, im::Envelope& response);
 
     void HandleUnknown(const im::Envelope& request, im::Envelope& response);

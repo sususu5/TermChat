@@ -273,23 +273,19 @@ void Webserver::OnWrite_(TcpConnection* client) {
     ret = client->write(&writeErrno);
     const auto remaining = client->to_write_bytes();
     if (remaining == 0) {
-        // Write completely
-        if (client->is_keep_alive()) {
-            // If the connection is persistent, modify the event to EPOLLIN
-            uint32_t events = conn_event_ | EPOLLIN;
-            epoller_->modFd(client->get_fd(), events);
-            client->UpdateEvents(events);
-            return;
-        }
-    } else if (ret < 0) {
-        // The buffer is full
-        if (writeErrno == EAGAIN) {
-            uint32_t events = conn_event_ | EPOLLOUT;
-            epoller_->modFd(client->get_fd(), events);
-            client->UpdateEvents(events);
-            return;
-        }
+        uint32_t events = conn_event_ | EPOLLIN;
+        epoller_->modFd(client->get_fd(), events);
+        client->UpdateEvents(events);
+        return;
     }
+
+    if (ret >= 0 || writeErrno == EAGAIN || writeErrno == 0) {
+        uint32_t events = conn_event_ | EPOLLOUT;
+        epoller_->modFd(client->get_fd(), events);
+        client->UpdateEvents(events);
+        return;
+    }
+
     CloseConn_(client, std::format("write close path: ret={}, errno={}, error={}, remaining={}, keep_alive={}", ret,
                                    writeErrno, ErrnoMessage(writeErrno), remaining, client->is_keep_alive()));
 }

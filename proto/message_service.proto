@@ -51,6 +51,10 @@ message MessageAck {
     uint64 receiver_id = 7;
 }
 
+message MessageAckBatch {
+    repeated MessageAck acks = 1;
+}
+
 message SyncMessagesReq {
     uint64 user_id = 1;
     uint64 last_ack_msg_id = 2;

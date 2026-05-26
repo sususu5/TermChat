@@ -1,11 +1,26 @@
 #include "msg_service.h"
+#include <cstdlib>
 #include <ctime>
+#include <string>
 #include "../dao/async_msg_writer.h"
 #include "../log/log.h"
 #include "../utils/id_generator.h"
 
+namespace {
+bool EnvFlagEnabled(const char* name) {
+    const char* value = std::getenv(name);
+    if (!value) {
+        return false;
+    }
+    const std::string flag(value);
+    return flag == "1" || flag == "true" || flag == "TRUE" || flag == "on" || flag == "ON";
+}
+}  // namespace
+
 MsgService::MsgService(PushService* push_service) : push_service_(push_service) {
+    push_persisted_ack_ = EnvFlagEnabled("TERMCHAT_PUSH_PERSISTED_ACK") || EnvFlagEnabled("ENABLE_PERSISTED_ACK_PUSH");
     AsyncMsgWriter::GetInstance()->Start();
+    LOG_INFO("MsgService persisted ACK push: {}", push_persisted_ack_ ? "enabled" : "disabled");
 }
 
 MsgService::~MsgService() { AsyncMsgWriter::GetInstance()->Stop(); }
@@ -22,7 +37,7 @@ void MsgService::OnMessagePersisted(uint64_t sender_id, uint64_t client_msg_id, 
                                              im::ACK_STATUS_PERSISTED);
     }
 
-    if (push_service_) {
+    if (push_persisted_ack_ && push_service_) {
         im::MessageAck ack;
         ack.set_msg_id(msg.msg_id());
         ack.set_success(true);
@@ -136,6 +151,15 @@ void MsgService::acknowledge_message(uint64_t current_user_id, const im::Message
     }
     LOG_INFO("Message[{}] acked by receiver={}, sender={}, status={}.", req.msg_id(), req.receiver_id(),
              req.sender_id(), static_cast<int>(req.status()));
+}
+
+void MsgService::acknowledge_message_batch(uint64_t current_user_id, const im::MessageAckBatch& req,
+                                           im::MessageAckBatch* resp) {
+    for (const auto& ack : req.acks()) {
+        im::MessageAck* ack_resp = resp->add_acks();
+        acknowledge_message(current_user_id, ack, ack_resp);
+    }
+    LOG_INFO("User[{}] acknowledged {} messages in batch.", current_user_id, req.acks_size());
 }
 
 void MsgService::sync_messages(uint64_t user_id, const im::SyncMessagesReq& req, im::SyncMessagesResp* resp) {

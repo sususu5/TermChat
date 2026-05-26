@@ -57,6 +57,7 @@
 ## 📚 Design Docs
 
 - [Message Reliability Model](docs/message-reliability.md)
+- [Performance Engineering](docs/performance-engineering.md)
 
 ---
 
@@ -113,6 +114,9 @@ perf script | stackcollapse-perf.pl | flamegraph.pl > perf.svg
 # Go performance benchmark
 go mod tidy
 go run ./tests/perf -addr 127.0.0.1:1316 -n 10000 -out benchmark-results/dev-single-conn
+
+# Toggle real-time PERSISTED ACK push for A/B testing
+TERMCHAT_PUSH_PERSISTED_ACK=1 ./build/relwithdebinfo/server/src/server -l 0
 
 # Run Client (FTXUI)
 ./build/debug/client/client

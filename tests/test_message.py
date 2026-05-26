@@ -66,6 +66,26 @@ class TestP2PMessage(unittest.TestCase):
         except Exception as e:
             raise AssertionError(f"Error receiving response: {e}") from e
 
+    def _send_delivered_ack_batch(self, sock, msg_id, sender_id, receiver_id, seq):
+        ack_env = protocol_pb2.Envelope()
+        ack_env.seq = seq
+        ack_env.cmd = protocol_pb2.CMD_MSG_ACK_BATCH
+        ack_env.timestamp = int(time.time())
+
+        ack = ack_env.msg_ack_batch.acks.add()
+        ack.msg_id = msg_id
+        ack.success = True
+        ack.status = message_service_pb2.ACK_STATUS_DELIVERED
+        ack.sender_id = sender_id
+        ack.receiver_id = receiver_id
+        self._send_msg(sock, ack_env)
+
+        resp = self._recv_msg(sock)
+        self.assertEqual(resp.cmd, protocol_pb2.CMD_MSG_ACK_BATCH)
+        self.assertEqual(len(resp.msg_ack_batch.acks), 1)
+        self.assertTrue(resp.msg_ack_batch.acks[0].success, resp.msg_ack_batch.acks[0].error_msg)
+        self.assertEqual(resp.msg_ack_batch.acks[0].status, message_service_pb2.ACK_STATUS_DELIVERED)
+
     def _register_and_login(self, username, password):
         sock = self._create_socket()
 
@@ -143,6 +163,15 @@ class TestP2PMessage(unittest.TestCase):
         self.assertEqual(push_msg.content.decode('utf-8'), msg_content)
         print("B received PUSH")
 
+        # 4.1 B sends a batched DELIVERED ACK, and A receives the delivered status push.
+        self._send_delivered_ack_batch(sock_b, msg_id, id_a, id_b, 201)
+        delivered_env = self._recv_msg(sock_a)
+        self.assertEqual(delivered_env.cmd, protocol_pb2.CMD_MSG_ACK)
+        self.assertTrue(delivered_env.msg_ack.success)
+        self.assertEqual(delivered_env.msg_ack.msg_id, msg_id)
+        self.assertEqual(delivered_env.msg_ack.status, message_service_pb2.ACK_STATUS_DELIVERED)
+        print("A received DELIVERED ACK")
+
         # 5. B replies to A
         reply_content = "Hi Alice! Got it."
         
@@ -175,6 +204,15 @@ class TestP2PMessage(unittest.TestCase):
         self.assertEqual(push_env_a.p2p_msg_push.msg_id, reply_msg_id)
         self.assertEqual(push_env_a.p2p_msg_push.content.decode('utf-8'), reply_content)
         print("A received PUSH")
+
+        # 7.1 A sends a batched DELIVERED ACK, and B receives the delivered status push.
+        self._send_delivered_ack_batch(sock_a, reply_msg_id, id_b, id_a, 202)
+        delivered_env_b = self._recv_msg(sock_b)
+        self.assertEqual(delivered_env_b.cmd, protocol_pb2.CMD_MSG_ACK)
+        self.assertTrue(delivered_env_b.msg_ack.success)
+        self.assertEqual(delivered_env_b.msg_ack.msg_id, reply_msg_id)
+        self.assertEqual(delivered_env_b.msg_ack.status, message_service_pb2.ACK_STATUS_DELIVERED)
+        print("B received DELIVERED ACK")
 
         # Cleanup
         sock_a.close()

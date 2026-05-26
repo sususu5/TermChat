@@ -37,6 +37,7 @@ enum CommandType {
     CMD_MSG_ACK       = 52;
     CMD_SYNC_MSGS_REQ = 53;
     CMD_SYNC_MSGS_RES = 54;
+    CMD_MSG_ACK_BATCH = 55;
 
     // Heartbeat
     CMD_HEARTBEAT     = 99;
@@ -67,5 +68,6 @@ message Envelope {
         MessageAck msg_ack = 302;
         SyncMessagesReq sync_msgs_req = 303;
         SyncMessagesResp sync_msgs_res = 304;
+        MessageAckBatch msg_ack_batch = 305;
     }
 }

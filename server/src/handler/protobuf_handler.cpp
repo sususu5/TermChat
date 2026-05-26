@@ -92,6 +92,9 @@ void ProtobufHandler::Dispatch(const im::Envelope& request, im::Envelope& respon
         case im::CMD_MSG_ACK:
             HandleMessageAck(request, response);
             break;
+        case im::CMD_MSG_ACK_BATCH:
+            HandleMessageAckBatch(request, response);
+            break;
         case im::CMD_SYNC_MSGS_REQ:
             HandleSyncMessages(request, response);
             break;
@@ -270,6 +273,26 @@ void ProtobufHandler::HandleMessageAck(const im::Envelope& request, im::Envelope
     msg_service_->acknowledge_message(CurrentUserId(), request.msg_ack(), &ack_resp);
     ack_resp.set_ref_seq(request.seq());
     response.mutable_msg_ack()->CopyFrom(ack_resp);
+}
+
+void ProtobufHandler::HandleMessageAckBatch(const im::Envelope& request, im::Envelope& response) {
+    if (RequireAuth(response, im::CMD_MSG_ACK_BATCH)) return;
+
+    response.set_cmd(im::CMD_MSG_ACK_BATCH);
+    if (!request.has_msg_ack_batch()) {
+        auto* ack_resp = response.mutable_msg_ack_batch()->add_acks();
+        ack_resp->set_success(false);
+        ack_resp->set_error_msg("Invalid request: missing message ack batch payload");
+        ack_resp->set_status(im::ACK_STATUS_UNKNOWN);
+        return;
+    }
+
+    im::MessageAckBatch ack_batch_resp;
+    msg_service_->acknowledge_message_batch(CurrentUserId(), request.msg_ack_batch(), &ack_batch_resp);
+    for (auto& ack_resp : *ack_batch_resp.mutable_acks()) {
+        ack_resp.set_ref_seq(request.seq());
+    }
+    response.mutable_msg_ack_batch()->CopyFrom(ack_batch_resp);
 }
 
 void ProtobufHandler::HandleSyncMessages(const im::Envelope& request, im::Envelope& response) {

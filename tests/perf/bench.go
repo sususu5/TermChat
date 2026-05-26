@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	pb "termchat/build/debug/proto/go"
+	pb "termchat/build/relwithdebinfo/proto/go"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -80,7 +80,7 @@ func main() {
 	receiverID := flag.Uint64("receiver", 2, "P2P receiver user id")
 	payloadBytes := flag.Int("payload", 256, "payload size in bytes")
 	scenarioName := flag.String("scenario", "single_conn_baseline", "scenario name")
-	outDir := flag.String("out", "", "output directory, defaults to benchmark-results/<timestamp>-<scenario>")
+	outDir := flag.String("out", "", "output directory, defaults to benchmark-results/<scenario>")
 	flag.Parse()
 
 	startedAt := time.Now().UTC()
@@ -98,8 +98,11 @@ func main() {
 	}
 
 	if *outDir == "" {
-		safeName := strings.NewReplacer(" ", "_", "/", "_").Replace(*scenarioName)
-		*outDir = filepath.Join("benchmark-results", startedAt.Format("20060102-150405")+"-"+safeName)
+		safeName := strings.NewReplacer(" ", "_", "/", "_").Replace(strings.TrimSpace(*scenarioName))
+		if safeName == "" {
+			safeName = "benchmark"
+		}
+		*outDir = filepath.Join("benchmark-results", safeName)
 	}
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
 		log.Fatalf("create output directory failed: %v", err)

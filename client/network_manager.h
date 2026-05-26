@@ -70,6 +70,8 @@ private:
     uint64_t NextSeq();
     uint64_t GenerateClientMsgId();
     void MergeMessageAckLocked(uint64_t msg_id, im::MessageAckStatus status);
+    void QueueDeliveredAck(const im::P2PMessage& msg);
+    void DeliveredAckLoop();
     void ListenerLoop();
     void HeartbeatLoop();
     void ClearAuth();
@@ -92,6 +94,7 @@ private:
     // Async Handling
     std::thread listener_thread_;
     std::thread heartbeat_thread_;
+    std::thread delivered_ack_thread_;
     std::atomic<bool> running_{false};
 
     std::mutex mutex_;
@@ -125,4 +128,8 @@ private:
     std::unordered_map<uint64_t, std::vector<im::P2PMessage>> p2p_chat_history_;
     std::unordered_map<uint64_t, std::unordered_set<uint64_t>> p2p_msg_ids_;
     std::unordered_map<uint64_t, MessageDeliveryState> p2p_msg_status_;
+
+    std::mutex delivered_ack_mutex_;
+    std::condition_variable delivered_ack_cv_;
+    std::vector<im::MessageAck> pending_delivered_acks_;
 };

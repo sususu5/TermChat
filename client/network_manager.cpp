@@ -27,11 +27,18 @@ bool NetworkManager::Connect(const std::string& host, int port) {
     running_ = true;
     listener_thread_ = std::thread(&NetworkManager::ListenerLoop, this);
     heartbeat_thread_ = std::thread(&NetworkManager::HeartbeatLoop, this);
+    delivered_ack_thread_ = std::thread(&NetworkManager::DeliveredAckLoop, this);
     return true;
 }
 
 void NetworkManager::Disconnect() {
     running_ = false;
+    delivered_ack_cv_.notify_all();
+
+    if (delivered_ack_thread_.joinable()) {
+        delivered_ack_thread_.join();
+    }
+
     if (sock_ != -1) {
         shutdown(sock_, SHUT_RDWR);
         close(sock_);
@@ -226,23 +233,19 @@ void NetworkManager::ListenerLoop() {
             if (inserted && on_message_callback_) {
                 on_message_callback_(msg);
             }
-            im::MessageAck ack;
-            ack.set_msg_id(msg.msg_id());
-            ack.set_success(true);
-            ack.set_status(im::ACK_STATUS_DELIVERED);
-            ack.set_sender_id(msg.sender_id());
-            ack.set_receiver_id(msg.receiver_id());
-
-            im::Envelope ack_env;
-            ack_env.set_cmd(im::CMD_MSG_ACK);
-            ack_env.set_timestamp(time(nullptr));
-            *ack_env.mutable_msg_ack() = ack;
-            SendEnvelope(ack_env);
+            QueueDeliveredAck(msg);
         } else if (env.cmd() == im::CMD_MSG_ACK && env.seq() == 0 && env.has_msg_ack()) {
             const auto& ack = env.msg_ack();
             if (ack.success()) {
                 std::lock_guard<std::mutex> lock(mutex_);
                 MergeMessageAckLocked(ack.msg_id(), ack.status());
+            }
+        } else if (env.cmd() == im::CMD_MSG_ACK_BATCH && env.seq() == 0 && env.has_msg_ack_batch()) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (const auto& ack : env.msg_ack_batch().acks()) {
+                if (ack.success()) {
+                    MergeMessageAckLocked(ack.msg_id(), ack.status());
+                }
             }
         } else {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -250,6 +253,65 @@ void NetworkManager::ListenerLoop() {
             // If the command is not push, notify the response
             cv_response_.notify_one();
         }
+    }
+}
+
+void NetworkManager::QueueDeliveredAck(const im::P2PMessage& msg) {
+    im::MessageAck ack;
+    ack.set_msg_id(msg.msg_id());
+    ack.set_success(true);
+    ack.set_status(im::ACK_STATUS_DELIVERED);
+    ack.set_sender_id(msg.sender_id());
+    ack.set_receiver_id(msg.receiver_id());
+
+    {
+        std::lock_guard<std::mutex> lock(delivered_ack_mutex_);
+        pending_delivered_acks_.push_back(std::move(ack));
+    }
+    delivered_ack_cv_.notify_one();
+}
+
+void NetworkManager::DeliveredAckLoop() {
+    constexpr size_t kMaxBatchSize = 32;
+    constexpr auto kMaxBatchDelay = std::chrono::milliseconds(50);
+
+    std::vector<im::MessageAck> batch;
+    while (running_) {
+        {
+            std::unique_lock<std::mutex> lock(delivered_ack_mutex_);
+            delivered_ack_cv_.wait_for(lock, kMaxBatchDelay, [this] {
+                return !running_ || pending_delivered_acks_.size() >= kMaxBatchSize;
+            });
+            if (pending_delivered_acks_.empty()) {
+                continue;
+            }
+            batch.swap(pending_delivered_acks_);
+        }
+
+        im::Envelope ack_env;
+        ack_env.set_cmd(im::CMD_MSG_ACK_BATCH);
+        ack_env.set_timestamp(time(nullptr));
+        auto* ack_batch = ack_env.mutable_msg_ack_batch();
+        for (auto& ack : batch) {
+            *ack_batch->add_acks() = std::move(ack);
+        }
+        SendEnvelope(ack_env);
+        batch.clear();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(delivered_ack_mutex_);
+        batch.swap(pending_delivered_acks_);
+    }
+    if (!batch.empty() && connected_) {
+        im::Envelope ack_env;
+        ack_env.set_cmd(im::CMD_MSG_ACK_BATCH);
+        ack_env.set_timestamp(time(nullptr));
+        auto* ack_batch = ack_env.mutable_msg_ack_batch();
+        for (auto& ack : batch) {
+            *ack_batch->add_acks() = std::move(ack);
+        }
+        SendEnvelope(ack_env);
     }
 }
 
@@ -344,6 +406,10 @@ void NetworkManager::ClearAuth() {
         pending_p2p_messages_.clear();
         response_by_seq_.clear();
         pending_friend_requests_.clear();
+        {
+            std::lock_guard<std::mutex> ack_lock(delivered_ack_mutex_);
+            pending_delivered_acks_.clear();
+        }
     }
 }
 
