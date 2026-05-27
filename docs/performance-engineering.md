@@ -64,6 +64,20 @@ go run ./tests/perf \
   -out benchmark-results/persisted-ack-on
 ```
 
+For protocol pipelining tests, keep the same server mode and increase benchmark in-flight requests on one TCP connection:
+
+```bash
+go run ./tests/perf \
+  -addr 127.0.0.1:1316 \
+  -n 10000 \
+  -payload 256 \
+  -inflight 64 \
+  -scenario single_conn_inflight_64 \
+  -out benchmark-results/single-conn-inflight-64
+```
+
+`-inflight 1` is the sequential baseline. Larger values test whether the protocol and server can correlate concurrent requests by `Envelope.seq` without forcing a full RTT wait between messages.
+
 Compare these fields in `summary.json`:
 
 ```text

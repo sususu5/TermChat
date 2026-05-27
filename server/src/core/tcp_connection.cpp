@@ -88,14 +88,23 @@ bool TcpConnection::process() {
         protocol_determined_ = true;
     }
 
-    if (handler_ && handler_->Process(read_buff_, write_buff_)) {
-        // Setup iov for HTTP file sending
-        if (conn_type_ == ConnType::HTTP) {
-            setup_iov_for_http();
-        }
-        return true;
+    if (!handler_) {
+        return false;
     }
-    return false;
+
+    if (conn_type_ == ConnType::HTTP) {
+        if (handler_->Process(read_buff_, write_buff_)) {
+            setup_iov_for_http();
+            return true;
+        }
+        return false;
+    }
+
+    bool produced_response = false;
+    while (handler_->Process(read_buff_, write_buff_)) {
+        produced_response = true;
+    }
+    return produced_response;
 }
 
 void TcpConnection::setup_iov_for_http() {

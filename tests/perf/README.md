@@ -11,6 +11,7 @@ go run ./tests/perf \
   -addr 127.0.0.1:1316 \
   -n 10000 \
   -payload 256 \
+  -inflight 1 \
   -out benchmark-results/dev-single-conn
 ```
 
@@ -22,6 +23,8 @@ summary.json
 latency.csv
 report.md
 ```
+
+Use `-inflight 1` for the original sequential request/ACK baseline. Use a larger value such as `-inflight 64` to measure single-connection protocol pipelining, where multiple requests are sent before their ACKs return.
 
 The output directory is stable. If `-out` is omitted, it defaults to `benchmark-results/<scenario>`; running the same scenario again overwrites the files in that directory instead of creating a timestamped folder.
 

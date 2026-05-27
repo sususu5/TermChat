@@ -31,6 +31,7 @@ type Scenario struct {
 	TotalMessages     int    `json:"total_messages"`
 	WarmupMessages    int    `json:"warmup_messages"`
 	PayloadBytes      int    `json:"payload_bytes"`
+	Inflight          int    `json:"inflight"`
 	Pattern           string `json:"pattern"`
 	GeneratedProtoDir string `json:"generated_proto_dir"`
 	StartedAt         string `json:"started_at"`
@@ -79,11 +80,19 @@ func main() {
 	username := flag.String("username", "bench_baseline", "benchmark username")
 	receiverID := flag.Uint64("receiver", 2, "P2P receiver user id")
 	payloadBytes := flag.Int("payload", 256, "payload size in bytes")
+	inflight := flag.Int("inflight", 1, "max in-flight P2P requests on the benchmark connection")
 	scenarioName := flag.String("scenario", "single_conn_baseline", "scenario name")
 	outDir := flag.String("out", "", "output directory, defaults to benchmark-results/<scenario>")
 	flag.Parse()
+	if *inflight < 1 {
+		log.Fatalf("inflight must be >= 1")
+	}
 
 	startedAt := time.Now().UTC()
+	pattern := "single_connection_sequential"
+	if *inflight > 1 {
+		pattern = "single_connection_pipelined"
+	}
 	scenario := Scenario{
 		Name:              *scenarioName,
 		ServerAddr:        *addr,
@@ -92,8 +101,9 @@ func main() {
 		TotalMessages:     *totalMessages,
 		WarmupMessages:    *warmupMessages,
 		PayloadBytes:      *payloadBytes,
-		Pattern:           "single_connection_sequential",
-		GeneratedProtoDir: "build/debug/proto/go",
+		Inflight:          *inflight,
+		Pattern:           pattern,
+		GeneratedProtoDir: "build/relwithdebinfo/proto/go",
 		StartedAt:         startedAt.Format(time.RFC3339Nano),
 	}
 
@@ -112,7 +122,7 @@ func main() {
 	}
 
 	fmt.Printf("=== TermChat Go Benchmark ===\n")
-	fmt.Printf("Target: %s, messages: %d, output: %s\n", *addr, *totalMessages, *outDir)
+	fmt.Printf("Target: %s, messages: %d, inflight: %d, output: %s\n", *addr, *totalMessages, *inflight, *outDir)
 
 	conn, err := net.Dial("tcp", *addr)
 	if err != nil {
@@ -136,28 +146,8 @@ func main() {
 	}
 	fmt.Println("Warmup completed")
 
-	records := make([]LatencyRecord, 0, *totalMessages)
-	errorsByType := map[string]int{}
-	valid := true
-	fatalError := ""
-	var firstFailureSeq uint64
 	benchStart := time.Now()
-	for i := 0; i < *totalMessages; i++ {
-		record, err := client.sendMeasuredP2P(*receiverID, payload)
-		if err != nil {
-			errorsByType[classifyError(err)]++
-			record.Error = err.Error()
-			record.Success = false
-			if isFatalConnectionError(err) {
-				valid = false
-				fatalError = err.Error()
-				firstFailureSeq = record.Seq
-				records = append(records, record)
-				break
-			}
-		}
-		records = append(records, record)
-	}
+	records, errorsByType, valid, fatalError, firstFailureSeq := client.runP2PBenchmark(*receiverID, payload, *totalMessages, *inflight)
 	duration := time.Since(benchStart)
 
 	summary := buildSummary(scenario.Name, *totalMessages, records, errorsByType, client.skippedPushes, duration,
@@ -232,6 +222,157 @@ func (c *BenchClient) handshake(username string) error {
 			return fmt.Errorf("login failed: missing payload")
 		}
 		return fmt.Errorf("login failed: %s", resp.GetErrorMsg())
+	}
+	return nil
+}
+
+func (c *BenchClient) runP2PBenchmark(receiverID uint64, content []byte, totalMessages int, inflight int) ([]LatencyRecord, map[string]int, bool, string, uint64) {
+	records := make([]LatencyRecord, 0, totalMessages)
+	errorsByType := map[string]int{}
+	valid := true
+	fatalError := ""
+	var firstFailureSeq uint64
+
+	if inflight == 1 {
+		for i := 0; i < totalMessages; i++ {
+			record, err := c.sendMeasuredP2P(receiverID, content)
+			if err != nil {
+				errorsByType[classifyError(err)]++
+				record.Error = err.Error()
+				record.Success = false
+				if isFatalConnectionError(err) {
+					valid = false
+					fatalError = err.Error()
+					firstFailureSeq = record.Seq
+					records = append(records, record)
+					break
+				}
+			}
+			records = append(records, record)
+		}
+		return records, errorsByType, valid, fatalError, firstFailureSeq
+	}
+
+	pending := make(map[uint64]int, inflight)
+	sent := 0
+	completed := 0
+	for completed < totalMessages {
+		for sent < totalMessages && len(pending) < inflight {
+			record, err := c.sendP2PRequest(receiverID, content)
+			records = append(records, record)
+			pending[record.Seq] = len(records) - 1
+			sent++
+			if err != nil {
+				errorsByType[classifyError(err)]++
+				records[len(records)-1].Error = err.Error()
+				records[len(records)-1].Success = false
+				valid = false
+				fatalError = err.Error()
+				firstFailureSeq = record.Seq
+				return records, errorsByType, valid, fatalError, firstFailureSeq
+			}
+		}
+
+		env, err := c.readNextMessageAck()
+		ackAt := time.Now()
+		if err != nil {
+			errorsByType[classifyError(err)]++
+			valid = false
+			fatalError = err.Error()
+			for seq, idx := range pending {
+				records[idx].AckUnix = ackAt.UnixNano()
+				records[idx].LatencyUS = ackAt.Sub(time.Unix(0, records[idx].SendUnix)).Microseconds()
+				records[idx].Error = err.Error()
+				firstFailureSeq = seq
+				break
+			}
+			return records, errorsByType, valid, fatalError, firstFailureSeq
+		}
+
+		idx, ok := pending[env.GetSeq()]
+		if !ok {
+			err := fmt.Errorf("unexpected ack seq=%d cmd=%s with no pending request", env.GetSeq(), env.GetCmd().String())
+			errorsByType[classifyError(err)]++
+			valid = false
+			fatalError = err.Error()
+			firstFailureSeq = env.GetSeq()
+			return records, errorsByType, valid, fatalError, firstFailureSeq
+		}
+		delete(pending, env.GetSeq())
+		completed++
+
+		if err := applyMessageAck(&records[idx], env, ackAt); err != nil {
+			errorsByType[classifyError(err)]++
+			records[idx].Error = err.Error()
+			records[idx].Success = false
+			if isFatalConnectionError(err) {
+				valid = false
+				fatalError = err.Error()
+				firstFailureSeq = records[idx].Seq
+				return records, errorsByType, valid, fatalError, firstFailureSeq
+			}
+		}
+	}
+	return records, errorsByType, valid, fatalError, firstFailureSeq
+}
+
+func (c *BenchClient) sendP2PRequest(receiverID uint64, content []byte) (LatencyRecord, error) {
+	seq := c.next()
+	sendAt := time.Now()
+	env := &pb.Envelope{
+		Seq:       seq,
+		Cmd:       pb.CommandType_CMD_P2P_MSG_REQ,
+		Timestamp: sendAt.Unix(),
+		Payload: &pb.Envelope_P2PMsgReq{
+			P2PMsgReq: &pb.P2PMessage{
+				ReceiverId:  receiverID,
+				Content:     content,
+				Timestamp:   sendAt.Unix(),
+				ClientMsgId: makeClientMsgID(seq, sendAt),
+			},
+		},
+	}
+
+	record := LatencyRecord{Seq: seq, SendUnix: sendAt.UnixNano()}
+	if err := sendPacket(c.rw, env); err != nil {
+		now := time.Now()
+		record.AckUnix = now.UnixNano()
+		record.LatencyUS = now.Sub(sendAt).Microseconds()
+		return record, err
+	}
+	return record, nil
+}
+
+func (c *BenchClient) readNextMessageAck() (*pb.Envelope, error) {
+	for {
+		env, err := readPacket(c.rw)
+		if err != nil {
+			return nil, err
+		}
+		if env.GetCmd() == pb.CommandType_CMD_MSG_ACK && env.GetSeq() != 0 {
+			return env, nil
+		}
+		if env.GetSeq() == 0 {
+			c.skippedPushes++
+			continue
+		}
+		return nil, fmt.Errorf("unexpected response while waiting for pipelined ack: seq=%d cmd=%s", env.GetSeq(), env.GetCmd().String())
+	}
+}
+
+func applyMessageAck(record *LatencyRecord, respEnv *pb.Envelope, ackAt time.Time) error {
+	record.AckUnix = ackAt.UnixNano()
+	record.LatencyUS = ackAt.Sub(time.Unix(0, record.SendUnix)).Microseconds()
+	ack := respEnv.GetMsgAck()
+	if ack == nil {
+		return fmt.Errorf("missing message ack")
+	}
+	record.MsgID = ack.GetMsgId()
+	record.Status = ack.GetStatus().String()
+	record.Success = ack.GetSuccess()
+	if !ack.GetSuccess() {
+		record.Error = ack.GetErrorMsg()
+		return fmt.Errorf("message ack failed: %s", ack.GetErrorMsg())
 	}
 	return nil
 }
@@ -454,6 +595,7 @@ func writeReport(path string, scenario Scenario, summary Summary) error {
 - Server: %s
 - Messages: %d
 - Payload: %d bytes
+- Inflight: %d
 - Pattern: %s
 
 ## Summary
@@ -475,6 +617,7 @@ func writeReport(path string, scenario Scenario, summary Summary) error {
 		scenario.ServerAddr,
 		scenario.TotalMessages,
 		scenario.PayloadBytes,
+		scenario.Inflight,
 		scenario.Pattern,
 		summary.Success,
 		summary.CompletedMessages,
