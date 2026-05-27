@@ -28,6 +28,7 @@ public:
 
     void Adjust(int id, int newExpires);
     void Add(int id, int timeOut);
+    void Remove(int id);
     void DoWork(int id);
     void Clear();
     void Tick();

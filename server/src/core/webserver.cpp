@@ -1,7 +1,7 @@
 #include "webserver.h"
 #include <cerrno>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <format>
 #include "../log/log.h"
 #include "../pool/scylla_session.h"
@@ -183,6 +183,9 @@ void Webserver::CloseConn_(TcpConnection* client, const std::string& reason) {
     LOG_INFO("Client[{}] closing, reason={}, to_write_bytes={}, keep_alive={}", client->get_fd(), reason,
              client->to_write_bytes(), client->is_keep_alive());
     epoller_->delFd(client->get_fd());
+    if (timeout_ms_ > 0) {
+        timer_->Remove(client->get_fd());
+    }
     client->close_conn();
 }
 
@@ -244,8 +247,8 @@ void Webserver::OnRead_(TcpConnection* client) {
     int readErrno = 0;
     ret = client->read(&readErrno);
     if (ret <= 0 && readErrno != EAGAIN) {
-        CloseConn_(client, std::format("read failed: ret={}, errno={}, error={}", ret, readErrno,
-                                       ErrnoMessage(readErrno)));
+        CloseConn_(client,
+                   std::format("read failed: ret={}, errno={}, error={}", ret, readErrno, ErrnoMessage(readErrno)));
         return;
     }
     OnProcess_(client);
