@@ -78,6 +78,19 @@ go run ./tests/perf \
 
 `-inflight 1` is the sequential baseline. Larger values test whether the protocol and server can correlate concurrent requests by `Envelope.seq` without forcing a full RTT wait between messages.
 
+For multi-client tests, run independent TCP clients concurrently and keep per-connection in-flight bounded:
+
+```bash
+go run ./tests/perf \
+  -addr 127.0.0.1:1316 \
+  -clients 1000 \
+  -messages-per-client 1000 \
+  -payload 256 \
+  -inflight 16 \
+  -scenario multi_client_1000_inflight_16 \
+  -out benchmark-results/multi-client-1000-inflight-16
+```
+
 Compare these fields in `summary.json`:
 
 ```text

@@ -279,9 +279,8 @@ void NetworkManager::DeliveredAckLoop() {
     while (running_) {
         {
             std::unique_lock<std::mutex> lock(delivered_ack_mutex_);
-            delivered_ack_cv_.wait_for(lock, kMaxBatchDelay, [this] {
-                return !running_ || pending_delivered_acks_.size() >= kMaxBatchSize;
-            });
+            delivered_ack_cv_.wait_for(lock, kMaxBatchDelay,
+                                       [this] { return !running_ || pending_delivered_acks_.size() >= kMaxBatchSize; });
             if (pending_delivered_acks_.empty()) {
                 continue;
             }
