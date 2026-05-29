@@ -34,12 +34,12 @@ std::string EpollEventSummary(uint32_t events) {
 }  // namespace
 
 Webserver::Webserver(int port, int trig_mode, int timeout_ms, int sql_port, const char* sql_user, const char* sql_pwd,
-                     const char* db_name, int conn_pool_num, int thread_num, bool open_log, int log_level,
-                     int log_que_size)
+                     const char* db_name, int conn_pool_num, int thread_num, int epoll_event_num, bool open_log,
+                     int log_level, int log_que_size)
     : port_(port), timeout_ms_(timeout_ms), is_close_(false), timer_(new HeapTimer()),
-      thread_pool_(new ThreadPool(thread_num)), epoller_(new Epoller()), push_service_(new PushService()),
-      auth_service_(new AuthService()), friend_service_(new FriendService(push_service_.get())),
-      msg_service_(new MsgService(push_service_.get())) {
+      thread_pool_(new ThreadPool(thread_num)), epoller_(new Epoller(epoll_event_num)),
+      push_service_(new PushService()), auth_service_(new AuthService()),
+      friend_service_(new FriendService(push_service_.get())), msg_service_(new MsgService(push_service_.get())) {
     const char* sql_env_host = getenv("MYSQL_HOST") ? getenv("MYSQL_HOST") : "localhost";
 
     if (open_log) {
@@ -53,7 +53,8 @@ Webserver::Webserver(int port, int trig_mode, int timeout_ms, int sql_port, cons
             LOG_INFO("LogSys level: {}", log_level);
             LOG_INFO("src_dir: {}", TcpConnection::src_dir);
             LOG_INFO("MySQL Host: {}", sql_env_host);
-            LOG_INFO("SqlConnPool num: {}, ThreadPool num: {}", conn_pool_num, thread_num);
+            LOG_INFO("SqlConnPool num: {}, ThreadPool num: {}, EpollEvent num: {}", conn_pool_num, thread_num,
+                     epoll_event_num);
         }
     }
 
@@ -348,5 +349,9 @@ bool Webserver::InitSocket_() {
 
 int Webserver::SetFdNonblock(int fd) {
     assert(fd > 0);
-    return fcntl(fd, F_SETFL, fcntl(fd, F_GETFD, 0) | O_NONBLOCK);
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return flags;
+    }
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }

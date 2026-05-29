@@ -1,7 +1,11 @@
 #include "msg_scylla_dao.h"
 #include <cassandra.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <string_view>
 #include "../log/log.h"
 #include "../pool/scylla_session.h"
 #include "../utils/id_generator.h"
@@ -22,6 +26,37 @@ namespace {
 int64_t NowMillis() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
         .count();
+}
+
+bool MetricsEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("TERMCHAT_METRICS");
+        if (!value) return false;
+        std::string_view flag(value);
+        return flag == "1" || flag == "true" || flag == "TRUE" || flag == "on" || flag == "ON";
+    }();
+    return enabled;
+}
+
+struct ScyllaMetric {
+    std::atomic<uint64_t> calls{0};
+    std::atomic<uint64_t> failures{0};
+    std::atomic<uint64_t> total_us{0};
+};
+
+void ReportScyllaMetric(const char* op, ScyllaMetric& metric, int64_t elapsed_us, bool ok, size_t items = 1) {
+    if (!MetricsEnabled()) return;
+
+    if (!ok) {
+        metric.failures.fetch_add(1, std::memory_order_relaxed);
+    }
+    const auto calls = metric.calls.fetch_add(1, std::memory_order_relaxed) + 1;
+    const auto total_us = metric.total_us.fetch_add(static_cast<uint64_t>(elapsed_us), std::memory_order_relaxed) +
+                          static_cast<uint64_t>(elapsed_us);
+    if (calls % 10000 != 0 && elapsed_us < 100000 && ok) return;
+
+    std::fprintf(stderr, "[metrics] scylla op=%s calls=%lu failures=%lu avg_us=%lu last_us=%ld items=%zu\n", op, calls,
+                 metric.failures.load(std::memory_order_relaxed), total_us / calls, elapsed_us, items);
 }
 }  // namespace
 
@@ -102,10 +137,14 @@ bool MsgScyllaDao::InsertMessage(const im::P2PMessage& msg) {
 
 bool MsgScyllaDao::InsertBatch(const std::vector<im::P2PMessage>& msgs) {
     if (msgs.empty()) return true;
+    static ScyllaMetric metric;
+    const bool metrics_enabled = MetricsEnabled();
+    const auto start = metrics_enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
     auto* session = ScyllaSession::Instance()->Session();
     if (!session) {
         LOG_ERROR("Scylla session is not initialized");
+        ReportScyllaMetric("insert_batch", metric, 0, false, msgs.size());
         return false;
     }
 
@@ -169,6 +208,11 @@ bool MsgScyllaDao::InsertBatch(const std::vector<im::P2PMessage>& msgs) {
         LOG_ERROR("Scylla batch insert failed: {}", CassFutureError(future));
         ok = false;
     }
+    const auto elapsed_us =
+        metrics_enabled
+            ? std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()
+            : 0;
+    ReportScyllaMetric("insert_batch", metric, elapsed_us, ok, msgs.size());
 
     cass_future_free(future);
     cass_batch_free(batch);
@@ -248,9 +292,15 @@ MsgScyllaDao::MessagePage MsgScyllaDao::GetMessagesForUserAfter(uint64_t user_id
 }
 
 MsgScyllaDao::ClientMsgDedupEntry MsgScyllaDao::GetClientMsgDedup(uint64_t sender_id, uint64_t client_msg_id) {
+    static ScyllaMetric metric;
+    const bool metrics_enabled = MetricsEnabled();
+    const auto start = metrics_enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     ClientMsgDedupEntry entry;
     auto* session = ScyllaSession::Instance()->Session();
-    if (!session || sender_id == 0 || client_msg_id == 0) return entry;
+    if (!session || sender_id == 0 || client_msg_id == 0) {
+        ReportScyllaMetric("dedup_get", metric, 0, false);
+        return entry;
+    }
 
     constexpr const char* k_select = "SELECT server_msg_id, receiver_id, status "
                                      "FROM im.client_msg_dedup "
@@ -285,6 +335,12 @@ MsgScyllaDao::ClientMsgDedupEntry MsgScyllaDao::GetClientMsgDedup(uint64_t sende
     } else {
         LOG_ERROR("Scylla client_msg_dedup query failed: {}", CassFutureError(future));
     }
+    const bool ok = cass_future_error_code(future) == CASS_OK;
+    const auto elapsed_us =
+        metrics_enabled
+            ? std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()
+            : 0;
+    ReportScyllaMetric("dedup_get", metric, elapsed_us, ok);
 
     cass_future_free(future);
     cass_statement_free(statement);
@@ -293,8 +349,14 @@ MsgScyllaDao::ClientMsgDedupEntry MsgScyllaDao::GetClientMsgDedup(uint64_t sende
 
 bool MsgScyllaDao::UpsertClientMsgDedup(uint64_t sender_id, uint64_t client_msg_id, uint64_t server_msg_id,
                                         uint64_t receiver_id, im::MessageAckStatus status) {
+    static ScyllaMetric metric;
+    const bool metrics_enabled = MetricsEnabled();
+    const auto start = metrics_enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     auto* session = ScyllaSession::Instance()->Session();
-    if (!session || sender_id == 0 || client_msg_id == 0 || server_msg_id == 0) return false;
+    if (!session || sender_id == 0 || client_msg_id == 0 || server_msg_id == 0) {
+        ReportScyllaMetric("dedup_upsert", metric, 0, false);
+        return false;
+    }
 
     constexpr const char* k_upsert =
         "INSERT INTO im.client_msg_dedup (sender_id, client_msg_id, server_msg_id, receiver_id, status, created_at, "
@@ -319,6 +381,11 @@ bool MsgScyllaDao::UpsertClientMsgDedup(uint64_t sender_id, uint64_t client_msg_
         LOG_ERROR("Scylla client_msg_dedup upsert failed: {}", CassFutureError(future));
         ok = false;
     }
+    const auto elapsed_us =
+        metrics_enabled
+            ? std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()
+            : 0;
+    ReportScyllaMetric("dedup_upsert", metric, elapsed_us, ok);
 
     cass_future_free(future);
     cass_statement_free(statement);

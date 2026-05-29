@@ -1,5 +1,6 @@
 #include <signal.h>
 #include <unistd.h>
+#include <cstdlib>
 #include "core/webserver.h"
 
 static Webserver* g_server = nullptr;
@@ -11,6 +12,20 @@ void signal_handler(int sig) {
     if (g_server) {
         g_server->Stop();
     }
+}
+
+int EnvInt(const char* name, int default_value) {
+    const char* value = std::getenv(name);
+    if (!value || *value == '\0') {
+        return default_value;
+    }
+
+    char* end = nullptr;
+    long parsed = std::strtol(value, &end, 10);
+    if (end == value || *end != '\0' || parsed <= 0) {
+        return default_value;
+    }
+    return static_cast<int>(parsed);
 }
 
 int main(int argc, char* argv[]) {
@@ -38,7 +53,11 @@ int main(int argc, char* argv[]) {
     sigaction(SIGTERM, &sa, nullptr);  // kill command
 
     {
-        Webserver server(1316, 3, 60000, 3306, "root", "123456", "testdb", 50, 40, open_log, 1, 1024);
+        const int mysql_pool_num = EnvInt("TERMCHAT_MYSQL_POOL_SIZE", 50);
+        const int thread_num = EnvInt("TERMCHAT_THREAD_NUM", 40);
+        const int epoll_event_num = EnvInt("TERMCHAT_EPOLL_EVENTS", 4096);
+        Webserver server(1316, 3, 60000, 3306, "root", "123456", "testdb", mysql_pool_num, thread_num, epoll_event_num,
+                         open_log, 1, 1024);
         g_server = &server;
         server.Start();
         g_server = nullptr;

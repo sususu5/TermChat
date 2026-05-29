@@ -36,6 +36,7 @@ private:
     MPSCQueue<QueueItem> queue_;
     std::thread worker_;
     std::atomic<bool> running_{false};
+    std::atomic<size_t> queued_items_{0};
     MsgScyllaDao dao_;
 
     static const size_t kBatchSize = 100;

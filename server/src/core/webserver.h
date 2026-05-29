@@ -20,7 +20,8 @@
 class Webserver {
 public:
     Webserver(int port, int trig_mode, int timeout_ms, int sql_port, const char* sql_user, const char* sql_pwd,
-              const char* db_name, int conn_pool_num, int thread_num, bool open_log, int log_level, int log_que_size);
+              const char* db_name, int conn_pool_num, int thread_num, int epoll_event_num, bool open_log, int log_level,
+              int log_que_size);
     ~Webserver();
     void Start();
     void Stop() { is_close_ = true; }

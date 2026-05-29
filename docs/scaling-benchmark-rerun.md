@@ -72,6 +72,30 @@ go run ./tests/perf \
   -out benchmark-results/02-scaling-2200c
 ```
 
+```bash
+go run ./tests/perf \
+  -addr 127.0.0.1:1316 \
+  -clients 2250 \
+  -messages-per-client 200 \
+  -payload 256 \
+  -inflight 2 \
+  -connect-ramp 30s \
+  -scenario scaling_2250c_i2_ramp30s \
+  -out benchmark-results/02-scaling-2250c
+```
+
+```bash
+go run ./tests/perf \
+  -addr 127.0.0.1:1316 \
+  -clients 2300 \
+  -messages-per-client 200 \
+  -payload 256 \
+  -inflight 2 \
+  -connect-ramp 30s \
+  -scenario scaling_2300c_i2_ramp30s \
+  -out benchmark-results/02-scaling-2300c
+```
+
 ## Three-Pass Template
 
 Use distinct output directories when collecting repeat runs:
