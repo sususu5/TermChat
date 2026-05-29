@@ -37,6 +37,35 @@ go run ./tests/perf \
   -out benchmark-results/multi-client-100-inflight-16
 ```
 
+For large multi-client runs, use `-connect-ramp` to spread connection, login, and warmup startup across a fixed window. The measured benchmark phase still starts only after all clients are ready:
+
+```bash
+go run ./tests/perf \
+  -addr 127.0.0.1:1316 \
+  -clients 2100 \
+  -messages-per-client 200 \
+  -payload 256 \
+  -inflight 2 \
+  -connect-ramp 30s \
+  -scenario scaling_2100c_i2 \
+  -out benchmark-results/02-scaling-2100c
+```
+
+Use `-duration` and `-rate-per-client` for IM-like low-frequency traffic. Rate mode currently uses `-inflight 1` so each client sends at a controlled per-client message rate:
+
+```bash
+go run ./tests/perf \
+  -addr 127.0.0.1:1316 \
+  -clients 1000 \
+  -duration 120s \
+  -rate-per-client 0.1 \
+  -payload 256 \
+  -inflight 1 \
+  -connect-ramp 30s \
+  -scenario im_1000_users_0_1rps \
+  -out benchmark-results/im-1000-users-0-1rps
+```
+
 The output directory is stable. If `-out` is omitted, it defaults to `benchmark-results/<scenario>`; running the same scenario again overwrites the files in that directory instead of creating a timestamped folder.
 
 `go.mod` and `go.sum` intentionally stay at the repository root because the benchmark imports generated protobuf packages under `build/relwithdebinfo/proto/go` using the root Go module path.

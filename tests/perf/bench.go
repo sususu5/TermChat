@@ -25,19 +25,23 @@ import (
 const password = "password"
 
 type Scenario struct {
-	Name              string `json:"name"`
-	ServerAddr        string `json:"server_addr"`
-	Username          string `json:"username"`
-	ReceiverID        uint64 `json:"receiver_id"`
-	Clients           int    `json:"clients"`
-	MessagesPerClient int    `json:"messages_per_client"`
-	TotalMessages     int    `json:"total_messages"`
-	WarmupMessages    int    `json:"warmup_messages"`
-	PayloadBytes      int    `json:"payload_bytes"`
-	Inflight          int    `json:"inflight"`
-	Pattern           string `json:"pattern"`
-	GeneratedProtoDir string `json:"generated_proto_dir"`
-	StartedAt         string `json:"started_at"`
+	Name               string  `json:"name"`
+	ServerAddr         string  `json:"server_addr"`
+	Username           string  `json:"username"`
+	ReceiverID         uint64  `json:"receiver_id"`
+	Clients            int     `json:"clients"`
+	MessagesPerClient  int     `json:"messages_per_client"`
+	TotalMessages      int     `json:"total_messages"`
+	WarmupMessages     int     `json:"warmup_messages"`
+	PayloadBytes       int     `json:"payload_bytes"`
+	Inflight           int     `json:"inflight"`
+	ConnectRampSeconds float64 `json:"connect_ramp_seconds,omitempty"`
+	DurationSeconds    float64 `json:"duration_seconds,omitempty"`
+	RatePerClient      float64 `json:"rate_per_client,omitempty"`
+	Mode               string  `json:"mode"`
+	Pattern            string  `json:"pattern"`
+	GeneratedProtoDir  string  `json:"generated_proto_dir"`
+	StartedAt          string  `json:"started_at"`
 }
 
 type LatencyRecord struct {
@@ -61,6 +65,10 @@ type Summary struct {
 	Clients            int                `json:"clients"`
 	MessagesPerClient  int                `json:"messages_per_client"`
 	Inflight           int                `json:"inflight"`
+	ConnectRampSeconds float64            `json:"connect_ramp_seconds,omitempty"`
+	DurationSeconds    float64            `json:"duration_seconds,omitempty"`
+	RatePerClient      float64            `json:"rate_per_client,omitempty"`
+	Mode               string             `json:"mode"`
 	RequestedMessages  int                `json:"requested_messages"`
 	CompletedMessages  int                `json:"completed_messages"`
 	Success            int                `json:"success"`
@@ -87,11 +95,14 @@ func main() {
 	legacyMessages := flag.Int("n", 10000, "legacy per-client message count when -messages-per-client is not set")
 	clients := flag.Int("clients", 1, "number of benchmark clients/connections")
 	messagesPerClient := flag.Int("messages-per-client", 0, "messages to send per client, defaults to -n")
+	durationFlag := flag.Duration("duration", 0, "rate mode duration, for example 120s or 5m")
+	ratePerClient := flag.Float64("rate-per-client", 0, "rate mode target messages per second per client")
 	warmupMessages := flag.Int("warmup", 100, "warmup messages per client before measurement")
 	username := flag.String("username", "bench_baseline", "benchmark username prefix")
 	receiverID := flag.Uint64("receiver", 2, "P2P receiver user id")
 	payloadBytes := flag.Int("payload", 256, "payload size in bytes")
 	inflight := flag.Int("inflight", 1, "max in-flight P2P requests per benchmark connection")
+	connectRamp := flag.Duration("connect-ramp", 0, "spread client connection startup over this duration, for example 30s")
 	scenarioName := flag.String("scenario", "single_conn_baseline", "scenario name")
 	outDir := flag.String("out", "", "output directory, defaults to benchmark-results/<scenario>")
 	flag.Parse()
@@ -110,10 +121,33 @@ func main() {
 	if *warmupMessages < 0 {
 		log.Fatalf("warmup must be >= 0")
 	}
+	if *connectRamp < 0 {
+		log.Fatalf("connect-ramp must be >= 0")
+	}
+	rateMode := *durationFlag > 0 || *ratePerClient > 0
+	if rateMode {
+		if *durationFlag <= 0 {
+			log.Fatalf("duration must be > 0 when rate-per-client is set")
+		}
+		if *ratePerClient <= 0 {
+			log.Fatalf("rate-per-client must be > 0 when duration is set")
+		}
+		if *inflight != 1 {
+			log.Fatalf("rate mode currently requires inflight=1")
+		}
+	}
 
 	startedAt := time.Now().UTC()
+	mode := "fixed_messages"
 	pattern := "single_connection_sequential"
-	if *clients > 1 && *inflight > 1 {
+	if rateMode {
+		mode = "rate_limited"
+		if *clients > 1 {
+			pattern = "multi_connection_rate_limited"
+		} else {
+			pattern = "single_connection_rate_limited"
+		}
+	} else if *clients > 1 && *inflight > 1 {
 		pattern = "multi_connection_pipelined"
 	} else if *clients > 1 {
 		pattern = "multi_connection_sequential"
@@ -121,20 +155,27 @@ func main() {
 		pattern = "single_connection_pipelined"
 	}
 	totalMessages := *clients * *messagesPerClient
+	if rateMode {
+		totalMessages = int(float64(*clients) * durationFlag.Seconds() * *ratePerClient)
+	}
 	scenario := Scenario{
-		Name:              *scenarioName,
-		ServerAddr:        *addr,
-		Username:          *username,
-		ReceiverID:        *receiverID,
-		Clients:           *clients,
-		MessagesPerClient: *messagesPerClient,
-		TotalMessages:     totalMessages,
-		WarmupMessages:    *warmupMessages,
-		PayloadBytes:      *payloadBytes,
-		Inflight:          *inflight,
-		Pattern:           pattern,
-		GeneratedProtoDir: "build/relwithdebinfo/proto/go",
-		StartedAt:         startedAt.Format(time.RFC3339Nano),
+		Name:               *scenarioName,
+		ServerAddr:         *addr,
+		Username:           *username,
+		ReceiverID:         *receiverID,
+		Clients:            *clients,
+		MessagesPerClient:  *messagesPerClient,
+		TotalMessages:      totalMessages,
+		WarmupMessages:     *warmupMessages,
+		PayloadBytes:       *payloadBytes,
+		Inflight:           *inflight,
+		ConnectRampSeconds: connectRamp.Seconds(),
+		DurationSeconds:    durationFlag.Seconds(),
+		RatePerClient:      *ratePerClient,
+		Mode:               mode,
+		Pattern:            pattern,
+		GeneratedProtoDir:  "build/relwithdebinfo/proto/go",
+		StartedAt:          startedAt.Format(time.RFC3339Nano),
 	}
 
 	if *outDir == "" {
@@ -152,12 +193,17 @@ func main() {
 	}
 
 	fmt.Printf("=== TermChat Go Benchmark ===\n")
-	fmt.Printf("Target: %s, clients: %d, messages/client: %d, total: %d, inflight: %d, output: %s\n",
-		*addr, *clients, *messagesPerClient, totalMessages, *inflight, *outDir)
+	if rateMode {
+		fmt.Printf("Target: %s, clients: %d, duration: %s, rate/client: %.3f msg/s, inflight: %d, connect-ramp: %s, output: %s\n",
+			*addr, *clients, durationFlag.String(), *ratePerClient, *inflight, connectRamp.String(), *outDir)
+	} else {
+		fmt.Printf("Target: %s, clients: %d, messages/client: %d, total: %d, inflight: %d, connect-ramp: %s, output: %s\n",
+			*addr, *clients, *messagesPerClient, totalMessages, *inflight, connectRamp.String(), *outDir)
+	}
 
 	payload := makePayload(*payloadBytes)
 	records, errorsByType, skippedPushes, duration, valid, fatalError, firstFailureSeq, firstFailureClient := runBenchmarkClients(
-		*addr, *username, *receiverID, payload, *clients, *messagesPerClient, *warmupMessages, *inflight)
+		*addr, *username, *receiverID, payload, scenario, *warmupMessages)
 
 	summary := buildSummary(scenario, records, errorsByType, skippedPushes, duration,
 		startedAt, time.Now().UTC(), valid, fatalError, firstFailureSeq, firstFailureClient)
@@ -193,23 +239,23 @@ type clientResult struct {
 	firstFailureSeq uint64
 }
 
-func runBenchmarkClients(addr string, usernamePrefix string, receiverID uint64, payload []byte, clients int,
-	messagesPerClient int, warmupMessages int, inflight int) ([]LatencyRecord, map[string]int, int, time.Duration, bool, string, uint64, int) {
-	results := make(chan clientResult, clients)
-	ready := make(chan struct{}, clients)
+func runBenchmarkClients(addr string, usernamePrefix string, receiverID uint64, payload []byte, scenario Scenario,
+	warmupMessages int) ([]LatencyRecord, map[string]int, int, time.Duration, bool, string, uint64, int) {
+	results := make(chan clientResult, scenario.Clients)
+	ready := make(chan struct{}, scenario.Clients)
 	start := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(clients)
+	wg.Add(scenario.Clients)
 
-	for clientID := 0; clientID < clients; clientID++ {
+	for clientID := 0; clientID < scenario.Clients; clientID++ {
 		go func(clientID int) {
 			defer wg.Done()
-			results <- runOneBenchmarkClient(clientID, addr, benchmarkUsername(usernamePrefix, clientID, clients), receiverID,
-				payload, messagesPerClient, warmupMessages, inflight, ready, start)
+			results <- runOneBenchmarkClient(clientID, addr, benchmarkUsername(usernamePrefix, clientID, scenario.Clients), receiverID,
+				payload, scenario, warmupMessages, ready, start)
 		}(clientID)
 	}
 
-	for i := 0; i < clients; i++ {
+	for i := 0; i < scenario.Clients; i++ {
 		<-ready
 	}
 	benchStart := time.Now()
@@ -218,7 +264,7 @@ func runBenchmarkClients(addr string, usernamePrefix string, receiverID uint64, 
 	duration := time.Since(benchStart)
 	close(results)
 
-	allRecords := make([]LatencyRecord, 0, clients*messagesPerClient)
+	allRecords := make([]LatencyRecord, 0, scenario.TotalMessages)
 	errorsByType := map[string]int{}
 	skippedPushes := 0
 	valid := true
@@ -255,11 +301,15 @@ func runBenchmarkClients(addr string, usernamePrefix string, receiverID uint64, 
 }
 
 func runOneBenchmarkClient(clientID int, addr string, username string, receiverID uint64, payload []byte,
-	messagesPerClient int, warmupMessages int, inflight int, ready chan<- struct{}, start <-chan struct{}) clientResult {
+	scenario Scenario, warmupMessages int, ready chan<- struct{}, start <-chan struct{}) clientResult {
 	result := clientResult{
 		clientID: clientID,
 		errors:   map[string]int{},
 		valid:    true,
+	}
+
+	if delay := connectRampDelay(clientID, scenario.Clients, time.Duration(scenario.ConnectRampSeconds*float64(time.Second))); delay > 0 {
+		time.Sleep(delay)
 	}
 
 	conn, err := net.Dial("tcp", addr)
@@ -297,7 +347,7 @@ func runOneBenchmarkClient(clientID int, addr string, username string, receiverI
 
 	ready <- struct{}{}
 	<-start
-	records, errorsByType, valid, fatalError, firstFailureSeq := client.runP2PBenchmark(receiverID, payload, messagesPerClient, inflight)
+	records, errorsByType, valid, fatalError, firstFailureSeq := client.runScenario(receiverID, payload, scenario)
 	for typ, count := range errorsByType {
 		result.errors[typ] += count
 	}
@@ -307,6 +357,13 @@ func runOneBenchmarkClient(clientID int, addr string, username string, receiverI
 	result.fatalError = fatalError
 	result.firstFailureSeq = firstFailureSeq
 	return result
+}
+
+func connectRampDelay(clientID int, clients int, ramp time.Duration) time.Duration {
+	if ramp <= 0 || clients <= 1 {
+		return 0
+	}
+	return time.Duration(float64(ramp) * float64(clientID) / float64(clients-1))
 }
 
 func benchmarkUsername(prefix string, clientID int, clients int) string {
@@ -366,6 +423,59 @@ func (c *BenchClient) handshake(username string) error {
 		return fmt.Errorf("login failed: %s", resp.GetErrorMsg())
 	}
 	return nil
+}
+
+func (c *BenchClient) runScenario(receiverID uint64, content []byte, scenario Scenario) ([]LatencyRecord, map[string]int, bool, string, uint64) {
+	if scenario.Mode == "rate_limited" {
+		return c.runRateLimitedP2PBenchmark(receiverID, content, time.Duration(scenario.DurationSeconds*float64(time.Second)), scenario.RatePerClient)
+	}
+	return c.runP2PBenchmark(receiverID, content, scenario.MessagesPerClient, scenario.Inflight)
+}
+
+func (c *BenchClient) runRateLimitedP2PBenchmark(receiverID uint64, content []byte, duration time.Duration, ratePerClient float64) ([]LatencyRecord, map[string]int, bool, string, uint64) {
+	records := make([]LatencyRecord, 0, int(duration.Seconds()*ratePerClient)+1)
+	errorsByType := map[string]int{}
+	valid := true
+	fatalError := ""
+	var firstFailureSeq uint64
+
+	if duration <= 0 || ratePerClient <= 0 {
+		return records, errorsByType, valid, fatalError, firstFailureSeq
+	}
+
+	interval := time.Duration(float64(time.Second) / ratePerClient)
+	if interval <= 0 {
+		interval = time.Nanosecond
+	}
+	deadline := time.Now().Add(duration)
+	nextSend := time.Now()
+
+	for time.Now().Before(deadline) {
+		now := time.Now()
+		if now.Before(nextSend) {
+			time.Sleep(nextSend.Sub(now))
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+
+		record, err := c.sendMeasuredP2P(receiverID, content)
+		if err != nil {
+			errorsByType[classifyError(err)]++
+			record.Error = err.Error()
+			record.Success = false
+			if isFatalConnectionError(err) {
+				valid = false
+				fatalError = err.Error()
+				firstFailureSeq = record.Seq
+				records = append(records, record)
+				break
+			}
+		}
+		records = append(records, record)
+		nextSend = nextSend.Add(interval)
+	}
+	return records, errorsByType, valid, fatalError, firstFailureSeq
 }
 
 func (c *BenchClient) runP2PBenchmark(receiverID uint64, content []byte, totalMessages int, inflight int) ([]LatencyRecord, map[string]int, bool, string, uint64) {
@@ -642,19 +752,25 @@ func buildSummary(scenario Scenario, records []LatencyRecord, errors map[string]
 		attemptedQPS = float64(len(records)) / duration.Seconds()
 	}
 	successQPS := 0.0
-	if success > 0 && lastSuccessAck > firstSuccessSend {
+	if success > 0 && duration > 0 && scenario.Mode == "rate_limited" {
+		successQPS = float64(success) / duration.Seconds()
+	} else if success > 0 && lastSuccessAck > firstSuccessSend {
 		successWindowSeconds := float64(lastSuccessAck-firstSuccessSend) / float64(time.Second)
 		successQPS = float64(success) / successWindowSeconds
 	}
 	return Summary{
 		Scenario:           scenario.Name,
-		Valid:              valid && failed == 0 && len(records) == scenario.TotalMessages,
+		Valid:              summaryValid(scenario, records, failed, valid),
 		FatalError:         fatalError,
 		FirstFailureSeq:    firstFailureSeq,
 		FirstFailureClient: firstFailureClient,
 		Clients:            scenario.Clients,
 		MessagesPerClient:  scenario.MessagesPerClient,
 		Inflight:           scenario.Inflight,
+		ConnectRampSeconds: scenario.ConnectRampSeconds,
+		DurationSeconds:    scenario.DurationSeconds,
+		RatePerClient:      scenario.RatePerClient,
+		Mode:               scenario.Mode,
 		RequestedMessages:  scenario.TotalMessages,
 		CompletedMessages:  len(records),
 		Success:            success,
@@ -668,6 +784,16 @@ func buildSummary(scenario Scenario, records []LatencyRecord, errors map[string]
 		StartedAt:          startedAt.Format(time.RFC3339Nano),
 		FinishedAt:         finishedAt.Format(time.RFC3339Nano),
 	}
+}
+
+func summaryValid(scenario Scenario, records []LatencyRecord, failed int, valid bool) bool {
+	if !valid || failed != 0 {
+		return false
+	}
+	if scenario.Mode == "rate_limited" {
+		return len(records) > 0
+	}
+	return len(records) == scenario.TotalMessages
 }
 
 func latencyStatsMS(values []int64) map[string]float64 {
@@ -741,8 +867,12 @@ func writeReport(path string, scenario Scenario, summary Summary) error {
 
 - Server: %s
 - Clients: %d
+- Mode: %s
 - Messages per client: %d
-- Total messages: %d
+- Target total messages: %d
+- Connect ramp: %.3f seconds
+- Duration: %.3f seconds
+- Rate per client: %.3f msg/s
 - Payload: %d bytes
 - Inflight: %d
 - Pattern: %s
@@ -765,8 +895,12 @@ func writeReport(path string, scenario Scenario, summary Summary) error {
 		scenario.Name,
 		scenario.ServerAddr,
 		scenario.Clients,
+		scenario.Mode,
 		scenario.MessagesPerClient,
 		scenario.TotalMessages,
+		scenario.ConnectRampSeconds,
+		scenario.DurationSeconds,
+		scenario.RatePerClient,
 		scenario.PayloadBytes,
 		scenario.Inflight,
 		scenario.Pattern,

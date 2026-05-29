@@ -324,8 +324,10 @@ bool Webserver::InitSocket_() {
         return false;
     }
 
-    // Start listening
-    ret = listen(listen_fd_, 8);
+    // Start listening. Use the kernel's configured maximum accept backlog so short connection bursts do not
+    // overflow a tiny application-level queue during benchmark ramp-up.
+    constexpr int kListenBacklog = SOMAXCONN;
+    ret = listen(listen_fd_, kListenBacklog);
     if (ret < 0) {
         LOG_ERROR("Listen port:{} error!", port_);
         close(listen_fd_);
@@ -340,7 +342,7 @@ bool Webserver::InitSocket_() {
         return false;
     }
     SetFdNonblock(listen_fd_);
-    LOG_INFO("Server port:{}", port_);
+    LOG_INFO("Server port:{}, listen backlog:{}", port_, kListenBacklog);
     return true;
 }
 

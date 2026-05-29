@@ -91,6 +91,37 @@ go run ./tests/perf \
   -out benchmark-results/multi-client-1000-inflight-16
 ```
 
+For high client counts, add a connection ramp so the benchmark does not measure a synthetic connect/login storm. Ramp-up covers connection establishment, login, and warmup; the measured phase still starts after all clients are ready:
+
+```bash
+go run ./tests/perf \
+  -addr 127.0.0.1:1316 \
+  -clients 2100 \
+  -messages-per-client 200 \
+  -payload 256 \
+  -inflight 2 \
+  -connect-ramp 30s \
+  -scenario scaling_2100c_i2 \
+  -out benchmark-results/02-scaling-2100c
+```
+
+For IM-like low-frequency traffic, run many connected clients for a fixed duration with a target per-client send rate:
+
+```bash
+go run ./tests/perf \
+  -addr 127.0.0.1:1316 \
+  -clients 1000 \
+  -duration 120s \
+  -rate-per-client 0.1 \
+  -payload 256 \
+  -inflight 1 \
+  -connect-ramp 30s \
+  -scenario im_1000_users_0_1rps \
+  -out benchmark-results/im-1000-users-0-1rps
+```
+
+This represents 1000 online clients with an average target of one message every 10 seconds per client. Use it to evaluate latency stability and error rate under realistic IM traffic instead of peak send-to-ACK throughput only.
+
 Compare these fields in `summary.json`:
 
 ```text
@@ -100,6 +131,7 @@ skipped_pushes
 latency_ms.p99
 latency_ms.p999
 errors
+connect_ramp_seconds
 ```
 
 `skipped_pushes` counts async server events that arrived while the benchmark was waiting for the request-response ACK. Lower values mean less event interleaving on the critical send-to-ACK path.
@@ -125,3 +157,6 @@ Single-connection sequential benchmark, 10,000 messages, 256-byte payload:
 | default | 1600.94 | 0 | 2.657 ms | 8.651 ms |
 
 These numbers are DevContainer trend data. Use them to validate the effect of ACK reduction, not as final production capacity.
+
+1. 基线确立：01-baseline
+2. 保持较低的单连接压力，大量增加连接数：02-scaling

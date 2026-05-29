@@ -4,6 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 ARG UBUNTU_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports
 ARG UBUNTU_MIRROR_USE_HTTPS=true
+ARG GO_VERSION=1.24.13
 
 RUN if [ "$UBUNTU_MIRROR" != "http://ports.ubuntu.com/ubuntu-ports" ]; then \
         sed -i "s|http://ports.ubuntu.com/ubuntu-ports|$UBUNTU_MIRROR|g" /etc/apt/sources.list.d/ubuntu.sources; \
@@ -49,8 +50,7 @@ RUN apt-get update && \
             python3 \
             python3-pip \
             protobuf-compiler \
-            python3-pyparsing \
-            golang-go && break; \
+            python3-pyparsing && break; \
         if [ "$attempt" = 5 ]; then exit 1; fi; \
         apt-get update; \
         sleep 5; \
@@ -61,7 +61,19 @@ RUN apt-get update && \
     (apt-get install -y --no-install-recommends linux-perf || apt-get install -y --no-install-recommends linux-tools-common linux-tools-generic || true) && \
     rm -rf /var/lib/apt/lists/*
 
-ENV PATH=$PATH:/root/go/bin
+RUN arch="$(dpkg --print-architecture)" && \
+    case "$arch" in \
+        amd64) go_arch=amd64 ;; \
+        arm64) go_arch=arm64 ;; \
+        *) echo "Unsupported Go architecture: $arch" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${go_arch}.tar.gz" -o /tmp/go.tar.gz && \
+    rm -rf /usr/local/go && \
+    tar -C /usr/local -xzf /tmp/go.tar.gz && \
+    rm /tmp/go.tar.gz
+
+ENV PATH=/usr/local/go/bin:$PATH:/root/go/bin
+ENV GOTOOLCHAIN=local
 RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 RUN go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 RUN go install golang.org/x/tools/gopls@latest
