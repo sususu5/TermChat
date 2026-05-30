@@ -1,12 +1,11 @@
 #include "msg_scylla_dao.h"
 #include <cassandra.h>
+#include <spdlog/spdlog.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cstdio>
 #include <cstdlib>
 #include <string_view>
-#include "../log/log.h"
 #include "../pool/scylla_session.h"
 #include "../utils/id_generator.h"
 
@@ -55,7 +54,7 @@ void ReportScyllaMetric(const char* op, ScyllaMetric& metric, int64_t elapsed_us
                           static_cast<uint64_t>(elapsed_us);
     if (calls % 10000 != 0 && elapsed_us < 100000 && ok) return;
 
-    std::fprintf(stderr, "[metrics] scylla op=%s calls=%lu failures=%lu avg_us=%lu last_us=%ld items=%zu\n", op, calls,
+    spdlog::info("[metrics] scylla op={} calls={} failures={} avg_us={} last_us={} items={}", op, calls,
                  metric.failures.load(std::memory_order_relaxed), total_us / calls, elapsed_us, items);
 }
 }  // namespace
@@ -63,7 +62,7 @@ void ReportScyllaMetric(const char* op, ScyllaMetric& metric, int64_t elapsed_us
 bool MsgScyllaDao::InsertMessage(const im::P2PMessage& msg) {
     auto* session = ScyllaSession::Instance()->Session();
     if (!session) {
-        LOG_ERROR("Scylla session is not initialized");
+        spdlog::error("Scylla session is not initialized");
         return false;
     }
 
@@ -126,7 +125,7 @@ bool MsgScyllaDao::InsertMessage(const im::P2PMessage& msg) {
 
     bool ok = true;
     if (cass_future_error_code(future) != CASS_OK) {
-        LOG_ERROR("Scylla batch insert failed: {}", CassFutureError(future));
+        spdlog::error("Scylla batch insert failed: {}", CassFutureError(future));
         ok = false;
     }
 
@@ -143,7 +142,7 @@ bool MsgScyllaDao::InsertBatch(const std::vector<im::P2PMessage>& msgs) {
 
     auto* session = ScyllaSession::Instance()->Session();
     if (!session) {
-        LOG_ERROR("Scylla session is not initialized");
+        spdlog::error("Scylla session is not initialized");
         ReportScyllaMetric("insert_batch", metric, 0, false, msgs.size());
         return false;
     }
@@ -205,7 +204,7 @@ bool MsgScyllaDao::InsertBatch(const std::vector<im::P2PMessage>& msgs) {
 
     bool ok = true;
     if (cass_future_error_code(future) != CASS_OK) {
-        LOG_ERROR("Scylla batch insert failed: {}", CassFutureError(future));
+        spdlog::error("Scylla batch insert failed: {}", CassFutureError(future));
         ok = false;
     }
     const auto elapsed_us =
@@ -273,7 +272,7 @@ MsgScyllaDao::MessagePage MsgScyllaDao::GetMessagesForUserAfter(uint64_t user_id
         cass_iterator_free(iterator);
         cass_result_free(cass_result);
     } else {
-        LOG_ERROR("Scylla query failed: {}", CassFutureError(future));
+        spdlog::error("Scylla query failed: {}", CassFutureError(future));
     }
 
     cass_future_free(future);
@@ -333,7 +332,7 @@ MsgScyllaDao::ClientMsgDedupEntry MsgScyllaDao::GetClientMsgDedup(uint64_t sende
         cass_iterator_free(iterator);
         cass_result_free(cass_result);
     } else {
-        LOG_ERROR("Scylla client_msg_dedup query failed: {}", CassFutureError(future));
+        spdlog::error("Scylla client_msg_dedup query failed: {}", CassFutureError(future));
     }
     const bool ok = cass_future_error_code(future) == CASS_OK;
     const auto elapsed_us =
@@ -378,7 +377,7 @@ bool MsgScyllaDao::UpsertClientMsgDedup(uint64_t sender_id, uint64_t client_msg_
 
     bool ok = true;
     if (cass_future_error_code(future) != CASS_OK) {
-        LOG_ERROR("Scylla client_msg_dedup upsert failed: {}", CassFutureError(future));
+        spdlog::error("Scylla client_msg_dedup upsert failed: {}", CassFutureError(future));
         ok = false;
     }
     const auto elapsed_us =

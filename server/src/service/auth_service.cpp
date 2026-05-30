@@ -1,5 +1,5 @@
 #include "auth_service.h"
-#include "../log/log.h"
+#include <spdlog/spdlog.h>
 #include "../utils/id_generator.h"
 #include "../utils/token_util.h"
 
@@ -23,11 +23,11 @@ void AuthService::user_register(const im::RegisterReq& req, im::RegisterResp* re
     if (user_dao_.Insert(user_id, username, password)) {
         resp->set_success(true);
         resp->set_user_id(user_id);
-        LOG_INFO("Register success: {} (ID: {})", username, user_id);
+        spdlog::info("Register success: {} (ID: {})", username, user_id);
     } else {
         resp->set_success(false);
         resp->set_error_msg("Database internal error");
-        LOG_ERROR("Register failed for user: {}", username);
+        spdlog::error("Register failed for user: {}", username);
     }
 }
 
@@ -55,10 +55,10 @@ void AuthService::user_login(TcpConnection* conn, const im::LoginReq& req, im::L
         resp->set_token(token);
 
         if (conn) conn->set_user_id(user.user_id());
-        LOG_INFO("Login success: {}", username);
+        spdlog::info("Login success: {}", username);
     } else {
         resp->set_success(false);
         resp->set_error_msg("Database internal error");
-        LOG_ERROR("Login failed for user: {}", username);
+        spdlog::error("Login failed for user: {}", username);
     }
 }

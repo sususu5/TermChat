@@ -1,3 +1,4 @@
+#include <spdlog/spdlog.h>
 #include "httpresponse.h"
 using namespace std;
 
@@ -106,7 +107,7 @@ void HttpResponse::AddContent_(Buffer& buff) {
     }
 
     // Map file to memory to improve file read performance
-    LOG_DEBUG("file path {}", (srcDir_ + path_).data());
+    spdlog::debug("file path {}", (srcDir_ + path_).data());
     int* mmRet = (int*)mmap(0, mmFileStat_.st_size, PROT_READ, MAP_PRIVATE, srcFd, 0);
     if (*mmRet == -1) {
         ErrorContent(buff, "File NotFound!");

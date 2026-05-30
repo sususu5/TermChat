@@ -1,5 +1,6 @@
 #include "protobuf_handler.h"
 #include <arpa/inet.h>
+#include <spdlog/spdlog.h>
 
 ProtobufHandler::ProtobufHandler(TcpConnection* conn, AuthService* auth_service, FriendService* friend_service,
                                  MsgService* msg_service, ThreadPool* thread_pool)
@@ -13,7 +14,7 @@ bool ProtobufHandler::Process(Buffer& read_buff, Buffer& write_buff) {
         return false;
     }
 
-    LOG_DEBUG("Received message: cmd={}, seq={}", request.cmd(), request.seq());
+    spdlog::debug("Received message: cmd={}, seq={}", static_cast<int>(request.cmd()), request.seq());
 
     im::Envelope response;
     response.set_seq(request.seq());
@@ -21,7 +22,7 @@ bool ProtobufHandler::Process(Buffer& read_buff, Buffer& write_buff) {
     Dispatch(request, response);
     EncodeMessage(response, write_buff);
 
-    LOG_DEBUG("Sent response: cmd={}, seq={}", response.cmd(), response.seq());
+    spdlog::debug("Sent response: cmd={}, seq={}", static_cast<int>(response.cmd()), response.seq());
     return true;
 }
 
@@ -35,7 +36,7 @@ bool ProtobufHandler::TryDecodeMessage(Buffer& read_buff, im::Envelope& envelope
     msg_len = ntohl(msg_len);
 
     if (msg_len > kMaxMessageSize) {
-        LOG_ERROR("Message too large: {} bytes (max: {})", msg_len, kMaxMessageSize);
+        spdlog::error("Message too large: {} bytes (max: {})", msg_len, kMaxMessageSize);
         read_buff.retrieve(kHeaderSize);
         return false;
     }
@@ -47,7 +48,7 @@ bool ProtobufHandler::TryDecodeMessage(Buffer& read_buff, im::Envelope& envelope
     // Parse the protobuf message
     const char* payload = read_buff.peek() + kHeaderSize;
     if (!envelope.ParseFromArray(payload, msg_len)) {
-        LOG_ERROR("Failed to parse protobuf message");
+        spdlog::error("Failed to parse protobuf message");
         read_buff.retrieve(kHeaderSize + msg_len);
         return false;
     }
@@ -60,7 +61,7 @@ bool ProtobufHandler::TryDecodeMessage(Buffer& read_buff, im::Envelope& envelope
 void ProtobufHandler::EncodeMessage(const im::Envelope& envelope, Buffer& write_buff) {
     std::string serialized;
     if (!envelope.SerializeToString(&serialized)) {
-        LOG_ERROR("Failed to serialize protobuf message");
+        spdlog::error("Failed to serialize protobuf message");
         return;
     }
 
@@ -109,7 +110,7 @@ void ProtobufHandler::Dispatch(const im::Envelope& request, im::Envelope& respon
 
 void ProtobufHandler::HandleRegister(const im::Envelope& request, im::Envelope& response) {
     if (!request.has_register_req()) {
-        LOG_ERROR("CMD_REGISTER_REQ received but payload is missing");
+        spdlog::error("CMD_REGISTER_REQ received but payload is missing");
         response.set_cmd(im::CMD_REGISTER_RES);
         auto* resp = response.mutable_register_res();
         resp->set_success(false);
@@ -118,7 +119,7 @@ void ProtobufHandler::HandleRegister(const im::Envelope& request, im::Envelope& 
     }
 
     const auto& req = request.register_req();
-    LOG_INFO("Register request: username={}", req.username());
+    spdlog::info("Register request: username={}", req.username());
 
     im::RegisterResp register_resp;
     auth_service_->user_register(req, &register_resp);
@@ -128,7 +129,7 @@ void ProtobufHandler::HandleRegister(const im::Envelope& request, im::Envelope& 
 
 void ProtobufHandler::HandleLogin(const im::Envelope& request, im::Envelope& response) {
     if (!request.has_login_req()) {
-        LOG_ERROR("CMD_LOGIN_REQ received but payload is missing");
+        spdlog::error("CMD_LOGIN_REQ received but payload is missing");
         response.set_cmd(im::CMD_LOGIN_RES);
         auto* resp = response.mutable_login_res();
         resp->set_success(false);
@@ -137,7 +138,7 @@ void ProtobufHandler::HandleLogin(const im::Envelope& request, im::Envelope& res
     }
 
     const auto& req = request.login_req();
-    LOG_INFO("Login request: username={}", req.username());
+    spdlog::info("Login request: username={}", req.username());
 
     im::LoginResp login_resp;
     auth_service_->user_login(conn_, req, &login_resp);
@@ -161,9 +162,9 @@ void ProtobufHandler::HandleLogin(const im::Envelope& request, im::Envelope& res
                     std::string serialized;
                     if (env.SerializeToString(&serialized)) {
                         TcpConnection::push_service->push_to_user(user_id, std::move(serialized));
-                        LOG_INFO("Pushed {} pending friend requests to user: {}", pending_reqs.size(), user_id);
+                        spdlog::info("Pushed {} pending friend requests to user: {}", pending_reqs.size(), user_id);
                     } else {
-                        LOG_ERROR("Failed to serialize friend request push message");
+                        spdlog::error("Failed to serialize friend request push message");
                     }
                 }
             }
@@ -175,7 +176,7 @@ void ProtobufHandler::HandleAddFriend(const im::Envelope& request, im::Envelope&
     if (RequireAuth(response, im::CMD_ADD_FRIEND_RES)) return;
 
     if (!request.has_add_friend_req()) {
-        LOG_ERROR("CMD_ADD_FRIEND_REQ received but payload is missing");
+        spdlog::error("CMD_ADD_FRIEND_REQ received but payload is missing");
         response.set_cmd(im::CMD_ADD_FRIEND_RES);
         auto* resp = response.mutable_add_friend_res();
         resp->set_success(false);
@@ -184,7 +185,7 @@ void ProtobufHandler::HandleAddFriend(const im::Envelope& request, im::Envelope&
     }
 
     const auto& req = request.add_friend_req();
-    LOG_INFO("Add friend request: sender={}, receiver_id={}", CurrentUserId(), req.receiver_id());
+    spdlog::info("Add friend request: sender={}, receiver_id={}", CurrentUserId(), req.receiver_id());
 
     im::AddFriendResp add_friend_resp;
     friend_service_->AddFriend(CurrentUserId(), req, &add_friend_resp);
@@ -196,7 +197,7 @@ void ProtobufHandler::HandleHandleFriend(const im::Envelope& request, im::Envelo
     if (RequireAuth(response, im::CMD_HANDLE_FRIEND_RES)) return;
 
     if (!request.has_handle_friend_req()) {
-        LOG_ERROR("CMD_HANDLE_FRIEND_REQ received but payload is missing");
+        spdlog::error("CMD_HANDLE_FRIEND_REQ received but payload is missing");
         response.set_cmd(im::CMD_HANDLE_FRIEND_RES);
         auto* resp = response.mutable_handle_friend_res();
         resp->set_success(false);
@@ -205,8 +206,8 @@ void ProtobufHandler::HandleHandleFriend(const im::Envelope& request, im::Envelo
     }
 
     const auto& req = request.handle_friend_req();
-    LOG_INFO("Handle friend request: receiver={}, req_id={}, sender_id={}", CurrentUserId(), req.req_id(),
-             req.sender_id());
+    spdlog::info("Handle friend request: receiver={}, req_id={}, sender_id={}", CurrentUserId(), req.req_id(),
+                 req.sender_id());
 
     im::HandleFriendResp handle_friend_resp;
     friend_service_->HandleFriend(CurrentUserId(), req, &handle_friend_resp);
@@ -218,7 +219,7 @@ void ProtobufHandler::HandleGetFriendList(const im::Envelope& request, im::Envel
     if (RequireAuth(response, im::CMD_GET_FRIEND_LIST_RES)) return;
 
     if (!request.has_get_friend_list_req()) {
-        LOG_ERROR("CMD_GET_FRIEND_LIST_REQ received but payload is missing");
+        spdlog::error("CMD_GET_FRIEND_LIST_REQ received but payload is missing");
         response.set_cmd(im::CMD_GET_FRIEND_LIST_RES);
         auto* resp = response.mutable_get_friend_list_res();
         resp->set_success(false);
@@ -226,7 +227,7 @@ void ProtobufHandler::HandleGetFriendList(const im::Envelope& request, im::Envel
         return;
     }
 
-    LOG_INFO("Get friend list request: user={}", CurrentUserId());
+    spdlog::info("Get friend list request: user={}", CurrentUserId());
 
     im::GetFriendListResp get_friend_list_resp;
     friend_service_->GetFriendList(CurrentUserId(), &get_friend_list_resp);
@@ -238,7 +239,7 @@ void ProtobufHandler::HandleP2PMsg(const im::Envelope& request, im::Envelope& re
     if (RequireAuth(response, im::CMD_MSG_ACK)) return;
 
     if (!request.has_p2p_msg_req()) {
-        LOG_ERROR("CMD_P2P_MSG_REQ received but payload is missing");
+        spdlog::error("CMD_P2P_MSG_REQ received but payload is missing");
         response.set_cmd(im::CMD_MSG_ACK);
         auto* resp = response.mutable_msg_ack();
         resp->set_success(false);
@@ -248,7 +249,7 @@ void ProtobufHandler::HandleP2PMsg(const im::Envelope& request, im::Envelope& re
     }
 
     const auto& req = request.p2p_msg_req();
-    LOG_INFO("P2P Msg request: from={} to={}", CurrentUserId(), req.receiver_id());
+    spdlog::info("P2P Msg request: from={} to={}", CurrentUserId(), req.receiver_id());
 
     im::MessageAck msg_ack;
     msg_service_->send_p2p_message(CurrentUserId(), req, &msg_ack);
@@ -299,7 +300,7 @@ void ProtobufHandler::HandleSyncMessages(const im::Envelope& request, im::Envelo
     if (RequireAuth(response, im::CMD_SYNC_MSGS_RES)) return;
 
     if (!request.has_sync_msgs_req()) {
-        LOG_ERROR("CMD_SYNC_MSGS_REQ received but payload is missing");
+        spdlog::error("CMD_SYNC_MSGS_REQ received but payload is missing");
         response.set_cmd(im::CMD_SYNC_MSGS_RES);
         auto* resp = response.mutable_sync_msgs_res();
         resp->set_success(false);
@@ -308,7 +309,7 @@ void ProtobufHandler::HandleSyncMessages(const im::Envelope& request, im::Envelo
     }
 
     const auto& req = request.sync_msgs_req();
-    LOG_INFO("Sync messages request: user={}", CurrentUserId());
+    spdlog::info("Sync messages request: user={}", CurrentUserId());
 
     im::SyncMessagesResp sync_resp;
     msg_service_->sync_messages(CurrentUserId(), req, &sync_resp);
@@ -317,13 +318,13 @@ void ProtobufHandler::HandleSyncMessages(const im::Envelope& request, im::Envelo
 }
 
 void ProtobufHandler::HandleUnknown(const im::Envelope& request, im::Envelope& response) {
-    LOG_WARN("Unknown command received: {}", request.cmd());
+    spdlog::warn("Unknown command received: {}", static_cast<int>(request.cmd()));
     response.set_cmd(im::CMD_UNKNOWN);
 }
 
 bool ProtobufHandler::RequireAuth(im::Envelope& response, im::CommandType resp_cmd) {
     if (!conn_ || !conn_->is_logged_in()) {
-        LOG_WARN("Unauthorized request: user not logged in");
+        spdlog::warn("Unauthorized request: user not logged in");
         response.set_cmd(resp_cmd);
         if (resp_cmd == im::CMD_MSG_ACK) {
             auto* ack = response.mutable_msg_ack();

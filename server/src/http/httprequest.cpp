@@ -1,4 +1,5 @@
 #include "httprequest.h"
+#include <spdlog/spdlog.h>
 #include <algorithm>
 #include "../dao/user_dao.h"
 #include "../utils/id_generator.h"
@@ -55,7 +56,7 @@ bool HttpRequest::parse(Buffer& buff) {
         // Skip the '\r\n' characters
         buff.retrieve_until(lineEnd + 2);
     }
-    LOG_DEBUG("[{}], [{}], [{}]", method_.c_str(), path_.c_str(), version_.c_str());
+    spdlog::debug("[{}], [{}], [{}]", method_.c_str(), path_.c_str(), version_.c_str());
     return true;
 }
 
@@ -69,7 +70,7 @@ bool HttpRequest::ParseRequestLine_(const std::string& line) {
         state_ = HEADERS;
         return true;
     }
-    LOG_ERROR("RequestLine Error");
+    spdlog::error("RequestLine Error");
     return false;
 }
 
@@ -99,7 +100,7 @@ void HttpRequest::ParseBody_(const std::string& line) {
     ParsePost_();
     // The state is set to FINISH, which means the parsing is complete
     state_ = FINISH;
-    LOG_DEBUG("Body: {}, len: {}", line, line.size());
+    spdlog::debug("Body: {}, len: {}", line, line.size());
 }
 
 int HttpRequest::ConvertHex(char ch) {
@@ -114,7 +115,7 @@ void HttpRequest::ParsePost_() {
         ParseFromUrlencoded_();
         if (DEFAULT_HTML_TAG.count(path_)) {
             int tag = DEFAULT_HTML_TAG.find(path_)->second;
-            LOG_DEBUG("Tag: {}", tag);
+            spdlog::debug("Tag: {}", tag);
             if (tag == 0 || tag == 1) {
                 bool isLogin = (tag == 1);
                 if (UserVerify(post_["username"], post_["password"], isLogin)) {
@@ -153,7 +154,7 @@ void HttpRequest::ParseFromUrlencoded_() {
                 value = body_.substr(j, i - j);
                 j = i + 1;
                 post_[key] = value;
-                LOG_DEBUG("{} = {}", key, value);
+                spdlog::debug("{} = {}", key, value);
                 break;
             default:
                 break;
@@ -168,31 +169,31 @@ void HttpRequest::ParseFromUrlencoded_() {
 
 bool HttpRequest::UserVerify(const std::string& name, const std::string& pwd, bool isLogin) {
     if (name == "" || pwd == "") {
-        LOG_ERROR("Username or password is empty!");
+        spdlog::error("Username or password is empty!");
         return false;
     }
-    LOG_INFO("Verify name: {} pwd: {}", name, pwd);
+    spdlog::info("Verify name: {} pwd: {}", name, pwd);
 
     UserDao dao;
     if (isLogin) {
         if (dao.VerifyUser(name, pwd)) {
-            LOG_DEBUG("UserVerify success!");
+            spdlog::debug("UserVerify success!");
             return true;
         } else {
-            LOG_INFO("pwd error or user not found!");
+            spdlog::info("pwd error or user not found!");
             return false;
         }
     } else {
         // Register
         if (dao.QueryExist(name)) {
-            LOG_INFO("user used!");
+            spdlog::info("user used!");
             return false;
         }
         if (dao.Insert(IdGenerator::GenerateRandId(), name, pwd)) {
-            LOG_DEBUG("register!");
+            spdlog::debug("register!");
             return true;
         } else {
-            LOG_DEBUG("Insert error!");
+            spdlog::debug("Insert error!");
             return false;
         }
     }

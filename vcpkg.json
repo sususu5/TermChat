@@ -29,7 +29,8 @@
         "sqlpp11",
         "sqlpp11-connector-mysql",
         "jwt-cpp",
-        "nlohmann-json"
+        "nlohmann-json",
+        "spdlog"
       ]
     }
   }

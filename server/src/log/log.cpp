@@ -1,20 +1,41 @@
 #include "log.h"
+#include <spdlog/async.h>
+#include <spdlog/sinks/basic_file_sink.h>
+#include <chrono>
+#include <filesystem>
+#include <format>
 #include <string>
 
-Log::~Log() {
-    if (is_async_ && deque_) {
-        deque_->close();
-        if (write_thread_ && write_thread_->joinable()) {
-            while (!deque_->empty()) {
-                deque_->flush();
-            };
-            write_thread_->join();
-        }
+namespace {
+std::string LogFileName(const char* path, const char* suffix) {
+    auto now = std::chrono::system_clock::now();
+    auto now_days = std::chrono::floor<std::chrono::days>(now);
+    auto ymd = std::chrono::year_month_day{now_days};
+    return std::format("{}/{:%Y_%m_%d}{}", path, ymd, suffix);
+}
+
+spdlog::level::level_enum ToSpdlogLevel(int level) {
+    switch (level) {
+        case 0:
+            return spdlog::level::debug;
+        case 1:
+            return spdlog::level::info;
+        case 2:
+            return spdlog::level::warn;
+        case 3:
+            return spdlog::level::err;
+        default:
+            return spdlog::level::info;
     }
-    if (fp_) {
-        std::lock_guard<std::mutex> locker(mtx_);
-        flush();
-        fclose(fp_);
+}
+}  // namespace
+
+Log::~Log() {
+    flush();
+    std::lock_guard<std::mutex> locker(mtx_);
+    if (logger_) {
+        spdlog::drop(logger_->name());
+        logger_.reset();
     }
 }
 
@@ -26,79 +47,49 @@ int Log::get_level() {
 void Log::set_level(int level) {
     std::lock_guard<std::mutex> locker(mtx_);
     level_ = level;
+    if (logger_) {
+        logger_->set_level(ToSpdlogLevel(level));
+    }
 }
 
-void Log::init(int level = 1, const char* path, const char* suffix, int maxQueueSize) {
-    is_open_ = true;
+void Log::init(int level, const char* path, const char* suffix, int maxQueueSize) {
+    std::lock_guard<std::mutex> locker(mtx_);
+
+    std::filesystem::create_directories(path);
+
     level_ = level;
+    const auto logger_name = "termchat";
+    const auto file_name = LogFileName(path, suffix);
+    spdlog::drop(logger_name);
+
     if (maxQueueSize > 0) {
-        is_async_ = true;
-        if (!deque_) {
-            std::unique_ptr<BlockDeque<std::string>> newDeque(new BlockDeque<std::string>);
-            deque_ = std::move(newDeque);
-            std::unique_ptr<std::thread> NewThread(new std::thread(flush_log_thread));
-            write_thread_ = std::move(NewThread);
-        }
+        spdlog::init_thread_pool(static_cast<size_t>(maxQueueSize), 1);
+        logger_ = spdlog::basic_logger_mt<spdlog::async_factory>(logger_name, file_name);
     } else {
-        is_async_ = false;
+        logger_ = spdlog::basic_logger_mt(logger_name, file_name);
     }
 
-    line_count_ = 0;
-    path_ = path;
-    suffix_ = suffix;
-
-    // Create log directory if it doesn't exist
-    struct stat st;
-    if (stat(path_, &st) != 0) {
-        mkdir(path_, 0777);
-    }
-
-    auto now = std::chrono::system_clock::now();
-    auto now_days = std::chrono::floor<std::chrono::days>(now);
-    auto ymd = std::chrono::year_month_day{now_days};
-
-    std::string tail = std::format("{:%Y_%m_%d}", ymd);
-    std::string file_name = std::format("{}/{}{}", path_, tail, suffix_);
-
-    {
-        std::lock_guard<std::mutex> locker(mtx_);
-        // Clear the buffer
-        buff_.retrieve_all();
-        // If the file pointer is not null, close the file
-        if (fp_) {
-            flush();
-            fclose(fp_);
-        }
-
-        fp_ = fopen(file_name.c_str(), "a");
-
-        // Retry if failed (though directory check above should handle it)
-        if (fp_ == nullptr) {
-            mkdir(path_, 0777);
-            fp_ = fopen(file_name.c_str(), "a");
-        }
-        assert(fp_ != nullptr);
-    }
+    logger_->set_level(ToSpdlogLevel(level));
+    logger_->flush_on(spdlog::level::err);
+    logger_->set_pattern("[%Y-%m-%d %H:%M:%S.%f] [%l] %v");
+    spdlog::set_default_logger(logger_);
+    spdlog::set_level(ToSpdlogLevel(level));
+    spdlog::flush_on(spdlog::level::err);
+    is_open_ = true;
 }
 
 void Log::flush() {
-    if (is_async_) {
-        deque_->flush();
+    auto logger = logger_;
+    if (logger) {
+        logger->flush();
     }
-    fflush(fp_);
 }
 
-void Log::async_write_() {
-    std::string str = "";
-    while (deque_->pop(str)) {
-        std::lock_guard<std::mutex> locker(mtx_);
-        fputs(str.c_str(), fp_);
-    }
-}
+void Log::flush_log_thread() { Log::instance()->flush(); }
 
 Log* Log::instance() {
     static Log inst;
     return &inst;
 }
 
-void Log::flush_log_thread() { Log::instance()->async_write_(); }
+spdlog::level::level_enum Log::to_spdlog_level_(int level) { return ToSpdlogLevel(level); }

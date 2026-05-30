@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../log/log.h"
+#include <spdlog/spdlog.h>
 #include "../pool/sqlconnpool.h"
 
 template <typename Table, typename KeyType>
@@ -47,14 +47,14 @@ protected:
     T execute(Func&& operation, const char* error_msg, T default_value) {
         auto conn = get_conn_guard();
         if (!conn) {
-            LOG_ERROR("{}: Get Database Connection failed!", error_msg);
+            spdlog::error("{}: Get Database Connection failed!", error_msg);
             return default_value;
         }
 
         try {
             return operation(*conn);
         } catch (const std::exception& e) {
-            LOG_ERROR("{}: {}", error_msg, e.what());
+            spdlog::error("{}: {}", error_msg, e.what());
             return default_value;
         }
     }

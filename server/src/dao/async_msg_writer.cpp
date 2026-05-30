@@ -1,10 +1,9 @@
 #include "async_msg_writer.h"
+#include <spdlog/spdlog.h>
 #include <chrono>
-#include <cstdio>
 #include <cstdlib>
 #include <iterator>
 #include <string_view>
-#include "../log/log.h"
 
 namespace {
 bool MetricsEnabled() {
@@ -22,7 +21,7 @@ void AsyncMsgWriter::Start() {
     bool expected = false;
     if (running_.compare_exchange_strong(expected, true)) {
         worker_ = std::thread(&AsyncMsgWriter::WorkerLoop, this);
-        LOG_INFO("AsyncMsgWriter started.");
+        spdlog::info("AsyncMsgWriter started.");
     }
 }
 
@@ -32,7 +31,7 @@ void AsyncMsgWriter::Stop() {
         if (worker_.joinable()) {
             worker_.join();
         }
-        LOG_INFO("AsyncMsgWriter stopped.");
+        spdlog::info("AsyncMsgWriter stopped.");
     }
 }
 
@@ -71,7 +70,7 @@ void AsyncMsgWriter::WorkerLoop() {
     uint64_t failed_batches_since_report = 0;
     const bool metrics_enabled = MetricsEnabled();
 
-    LOG_INFO("AsyncMsgWriter WorkerLoop started.");
+    spdlog::info("AsyncMsgWriter WorkerLoop started.");
 
     while (running_) {
         auto count = queue_.dequeue_bulk(std::back_inserter(batch_buffer), kBatchSize);
@@ -91,7 +90,7 @@ void AsyncMsgWriter::WorkerLoop() {
                 if (retry_count > kMaxRetries) break;
                 auto wait_ms = kBaseWaitMs * (1 << (retry_count - 1));
                 if (wait_ms > kMaxWaitMs) wait_ms = kMaxWaitMs;
-                LOG_WARN("Batch insert failed, retrying {}/{} in {}ms...", retry_count, kMaxRetries, wait_ms);
+                spdlog::warn("Batch insert failed, retrying {}/{} in {}ms...", retry_count, kMaxRetries, wait_ms);
                 std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
             }
             auto persist_us = metrics_enabled ? std::chrono::duration_cast<std::chrono::microseconds>(
@@ -100,16 +99,15 @@ void AsyncMsgWriter::WorkerLoop() {
                                               : 0;
 
             if (!success) {
-                LOG_ERROR("Failed to insert batch of {} messages.", count);
+                spdlog::error("Failed to insert batch of {} messages.", count);
                 failed_batches_since_report++;
             }
             batches_since_report++;
             messages_since_report += count;
             persist_us_since_report += static_cast<uint64_t>(persist_us);
             if (metrics_enabled && (batches_since_report >= 100 || persist_us >= 100000)) {
-                std::fprintf(stderr,
-                             "[metrics] async_writer batches=%lu messages=%lu avg_persist_us=%lu last_persist_us=%ld "
-                             "failed_batches=%lu queued=%zu\n",
+                spdlog::info("[metrics] async_writer batches={} messages={} avg_persist_us={} last_persist_us={} "
+                             "failed_batches={} queued={}",
                              batches_since_report, messages_since_report,
                              persist_us_since_report / batches_since_report, persist_us, failed_batches_since_report,
                              queued_items_.load(std::memory_order_relaxed));
@@ -131,12 +129,12 @@ void AsyncMsgWriter::WorkerLoop() {
             queued_items_.fetch_sub(count, std::memory_order_relaxed);
             const bool success = PersistBatch(batch_buffer);
             if (!success) {
-                LOG_ERROR("Failed to insert batch of {} messages.", count);
+                spdlog::error("Failed to insert batch of {} messages.", count);
             }
             NotifyCallbacks(batch_buffer, success);
             batch_buffer.clear();
         }
     }
 
-    LOG_INFO("AsyncMsgWriter WorkerLoop stopped. Flushed remaining messages.");
+    spdlog::info("AsyncMsgWriter WorkerLoop stopped. Flushed remaining messages.");
 }

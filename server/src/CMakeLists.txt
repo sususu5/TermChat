@@ -7,6 +7,7 @@ find_package(Protobuf REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 find_package(jwt-cpp CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(spdlog CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # ---------------------------------------------------------------------------
@@ -72,6 +73,7 @@ target_link_libraries(termchat_core PUBLIC
     sqlpp11::mariadb
     jwt-cpp::jwt-cpp
     nlohmann_json::nlohmann_json
+    spdlog::spdlog
     OpenSSL::SSL
     OpenSSL::Crypto
     scylla-cpp-driver

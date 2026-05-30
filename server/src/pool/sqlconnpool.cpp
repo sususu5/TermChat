@@ -1,5 +1,5 @@
 #include "sqlconnpool.h"
-#include "../log/log.h"
+#include <spdlog/spdlog.h>
 
 SqlConnPool* SqlConnPool::Instance() {
     static SqlConnPool pool;
@@ -23,19 +23,19 @@ auto SqlConnPool::Init(const char* host, uint16_t port, const char* user, const 
             auto conn = new sqlpp::mysql::connection(config);
             conn_queue_.emplace(conn);
         } catch (const std::exception& e) {
-            LOG_ERROR("MYSQL init error: {}", e.what());
+            spdlog::error("MYSQL init error: {}", e.what());
         }
     }
     MAX_CONN_ = connSize;
     sem_init(&semId_, 0, MAX_CONN_);
 
-    LOG_INFO("MYSQL connection pool initialized successfully!");
+    spdlog::info("MYSQL connection pool initialized successfully!");
 }
 
 auto SqlConnPool::GetConn() -> sqlpp::mysql::connection* {
     sqlpp::mysql::connection* conn = nullptr;
     if (conn_queue_.empty()) {
-        LOG_WARN("SqlConnPool busy!");
+        spdlog::warn("SqlConnPool busy!");
         return nullptr;
     }
     // Check if the semaphore is greater than 0 which means there are available connections

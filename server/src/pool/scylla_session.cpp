@@ -1,7 +1,7 @@
 #include "scylla_session.h"
+#include <spdlog/spdlog.h>
 #include <cstring>
 #include <string>
-#include "../log/log.h"
 
 namespace {
 std::string CassFutureError(CassFuture* future) {
@@ -31,7 +31,7 @@ bool ScyllaSession::Init(const char* host, uint16_t port, const char* user, cons
     cluster_ = cass_cluster_new();
     session_ = cass_session_new();
     if (!cluster_ || !session_) {
-        LOG_ERROR("Scylla init failed: out of memory");
+        spdlog::error("Scylla init failed: out of memory");
         Close();
         return false;
     }
@@ -53,14 +53,14 @@ bool ScyllaSession::Init(const char* host, uint16_t port, const char* user, cons
     if (cass_future_error_code(connect_future) != CASS_OK) {
         auto err = CassFutureError(connect_future);
         cass_future_free(connect_future);
-        LOG_ERROR("Scylla connect failed: {}", err);
+        spdlog::error("Scylla connect failed: {}", err);
         Close();
         return false;
     }
 
     cass_future_free(connect_future);
     initialized_ = true;
-    LOG_INFO("Scylla session initialized successfully.");
+    spdlog::info("Scylla session initialized successfully.");
     return true;
 }
 

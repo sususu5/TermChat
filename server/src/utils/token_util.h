@@ -2,11 +2,11 @@
 
 #include <jwt-cpp/jwt.h>
 #include <jwt-cpp/traits/nlohmann-json/traits.h>
+#include <spdlog/spdlog.h>
 #include <chrono>
 #include <cstdint>
 #include <nlohmann/json.hpp>
 #include <string>
-#include "../log/log.h"
 
 using traits = jwt::traits::nlohmann_json;
 
@@ -34,8 +34,8 @@ public:
 
         try {
             auto decoded = jwt::decode<traits>(token);
-                    auto verifier =
-                        jwt::verify<traits>().allow_algorithm(jwt::algorithm::hs256{kSecretKey}).with_issuer("termchat");
+            auto verifier =
+                jwt::verify<traits>().allow_algorithm(jwt::algorithm::hs256{kSecretKey}).with_issuer("termchat");
             verifier.verify(decoded);
 
             if (decoded.has_payload_claim("user_id")) {
@@ -44,7 +44,7 @@ public:
             }
             return false;
         } catch (const std::exception& e) {
-            LOG_WARN("Token verification failed: {}", e.what());
+            spdlog::warn("Token verification failed: {}", e.what());
             return false;
         }
     }

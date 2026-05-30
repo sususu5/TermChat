@@ -45,17 +45,19 @@ Webserver::Webserver(int port, int trig_mode, int timeout_ms, int sql_port, cons
     if (open_log) {
         Log::instance()->init(log_level, "./log", ".log", log_que_size);
         if (is_close_) {
-            LOG_ERROR("========== Server init error!==========");
+            spdlog::error("========== Server init error!==========");
         } else {
-            LOG_INFO("========== Server init ==========");
-            LOG_INFO("Listen Mode: {}, OpenConn Mode: {}", (listen_event_ & EPOLLET ? "ET" : "LT"),
-                     (conn_event_ & EPOLLET ? "ET" : "LT"));
-            LOG_INFO("LogSys level: {}", log_level);
-            LOG_INFO("src_dir: {}", TcpConnection::src_dir);
-            LOG_INFO("MySQL Host: {}", sql_env_host);
-            LOG_INFO("SqlConnPool num: {}, ThreadPool num: {}, EpollEvent num: {}", conn_pool_num, thread_num,
-                     epoll_event_num);
+            spdlog::info("========== Server init ==========");
+            spdlog::info("Listen Mode: {}, OpenConn Mode: {}", (listen_event_ & EPOLLET ? "ET" : "LT"),
+                         (conn_event_ & EPOLLET ? "ET" : "LT"));
+            spdlog::info("LogSys level: {}", log_level);
+            spdlog::info("src_dir: {}", TcpConnection::src_dir);
+            spdlog::info("MySQL Host: {}", sql_env_host);
+            spdlog::info("SqlConnPool num: {}, ThreadPool num: {}, EpollEvent num: {}", conn_pool_num, thread_num,
+                         epoll_event_num);
         }
+    } else {
+        spdlog::set_level(spdlog::level::off);
     }
 
     // Initialize services
@@ -88,9 +90,9 @@ Webserver::Webserver(int port, int trig_mode, int timeout_ms, int sql_port, cons
         scylla_port = static_cast<uint16_t>(std::strtoul(scylla_port_str, nullptr, 10));
     }
     if (!ScyllaSession::Instance()->Init(scylla_host, scylla_port, scylla_user, scylla_pwd)) {
-        LOG_WARN("Scylla session init failed. Message persistence may be unavailable.");
+        spdlog::warn("Scylla session init failed. Message persistence may be unavailable.");
     } else {
-        LOG_INFO("Scylla session initialized successfully.");
+        spdlog::info("Scylla session initialized successfully.");
     }
     InitEventMode_(trig_mode);
     if (!InitSocket_()) {
@@ -99,13 +101,13 @@ Webserver::Webserver(int port, int trig_mode, int timeout_ms, int sql_port, cons
 }
 
 Webserver::~Webserver() {
-    LOG_INFO("========== Server shutting down ==========");
+    spdlog::info("========== Server shutting down ==========");
     close(listen_fd_);
     is_close_ = true;
     free(src_dir_);
     SqlConnPool::Instance()->ClosePool();
     ScyllaSession::Instance()->Close();
-    LOG_INFO("========== Server stopped ==========");
+    spdlog::info("========== Server stopped ==========");
     Log::instance()->flush();
 }
 
@@ -136,7 +138,7 @@ void Webserver::InitEventMode_(int trig_mode) {
 void Webserver::Start() {
     int time_ms = -1;
     if (!is_close_) {
-        LOG_INFO("========== Server start ==========");
+        spdlog::info("========== Server start ==========");
     }
     while (!is_close_) {
         if (timeout_ms_ > 0) {
@@ -164,7 +166,7 @@ void Webserver::Start() {
                 assert(connections_.count(fd) > 0);
                 DealWrite_(connections_[fd].get());
             } else {
-                LOG_ERROR("Unexpected event");
+                spdlog::error("Unexpected event");
             }
         }
     }
@@ -174,15 +176,15 @@ void Webserver::SendError_(int fd, const char* info) {
     assert(fd > 0);
     int ret = send(fd, info, strlen(info), 0);
     if (ret < 0) {
-        LOG_WARN("send error to client[{}] error!", fd);
+        spdlog::warn("send error to client[{}] error!", fd);
     }
     close(fd);
 }
 
 void Webserver::CloseConn_(TcpConnection* client, const std::string& reason) {
     assert(client);
-    LOG_INFO("Client[{}] closing, reason={}, to_write_bytes={}, keep_alive={}", client->get_fd(), reason,
-             client->to_write_bytes(), client->is_keep_alive());
+    spdlog::info("Client[{}] closing, reason={}, to_write_bytes={}, keep_alive={}", client->get_fd(), reason,
+                 client->to_write_bytes(), client->is_keep_alive());
     epoller_->delFd(client->get_fd());
     if (timeout_ms_ > 0) {
         timer_->Remove(client->get_fd());
@@ -203,7 +205,7 @@ void Webserver::AddClient_(int fd, sockaddr_in addr) {
         conn_ptr->UpdateEvents(EPOLLIN | conn_event_);
     }
     SetFdNonblock(fd);
-    LOG_INFO("Client[{}] in!", conn_ptr->get_fd());
+    spdlog::info("Client[{}] in!", conn_ptr->get_fd());
 }
 
 void Webserver::DealListen_() {
@@ -216,7 +218,7 @@ void Webserver::DealListen_() {
             return;
         } else if (TcpConnection::user_count >= MAX_FD) {
             SendError_(fd, "Server busy!");
-            LOG_WARN("Clients is full!");
+            spdlog::warn("Clients is full!");
             return;
         }
         AddClient_(fd, addr);
@@ -304,7 +306,7 @@ bool Webserver::InitSocket_() {
     // Create a socket
     listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd_ < 0) {
-        LOG_ERROR("Create socket error! port:{}", port_);
+        spdlog::error("Create socket error! port:{}", port_);
         return false;
     }
 
@@ -312,7 +314,7 @@ bool Webserver::InitSocket_() {
     int optval = 1;
     ret = setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
     if (ret == -1) {
-        LOG_ERROR("Set socket error!");
+        spdlog::error("Set socket error!");
         close(listen_fd_);
         return false;
     }
@@ -320,7 +322,7 @@ bool Webserver::InitSocket_() {
     // Bind the socket to the address
     ret = bind(listen_fd_, (struct sockaddr*)&addr, sizeof(addr));
     if (ret < 0) {
-        LOG_ERROR("Bind Port:{} error!", port_);
+        spdlog::error("Bind Port:{} error!", port_);
         close(listen_fd_);
         return false;
     }
@@ -330,7 +332,7 @@ bool Webserver::InitSocket_() {
     constexpr int kListenBacklog = SOMAXCONN;
     ret = listen(listen_fd_, kListenBacklog);
     if (ret < 0) {
-        LOG_ERROR("Listen port:{} error!", port_);
+        spdlog::error("Listen port:{} error!", port_);
         close(listen_fd_);
         return false;
     }
@@ -338,12 +340,12 @@ bool Webserver::InitSocket_() {
     // Add the listen socket to the epoll
     ret = epoller_->addFd(listen_fd_, EPOLLIN | listen_event_);
     if (ret == 0) {
-        LOG_ERROR("Add listen error!");
+        spdlog::error("Add listen error!");
         close(listen_fd_);
         return false;
     }
     SetFdNonblock(listen_fd_);
-    LOG_INFO("Server port:{}, listen backlog:{}", port_, kListenBacklog);
+    spdlog::info("Server port:{}, listen backlog:{}", port_, kListenBacklog);
     return true;
 }
 

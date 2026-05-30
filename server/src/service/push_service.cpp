@@ -1,20 +1,20 @@
 #include "push_service.h"
+#include <spdlog/spdlog.h>
 #include <ctime>
 #include "../core/tcp_connection.h"
-#include "../log/log.h"
 #include "protocol.pb.h"
 
 void PushService::add_client(uint64_t user_id, TcpConnection* conn) {
     std::lock_guard<std::mutex> lock(mtx_);
     online_connections_[user_id] = conn;
-    LOG_INFO("User[{}] registered for push service", user_id);
+    spdlog::info("User[{}] registered for push service", user_id);
 }
 
 void PushService::remove_client(uint64_t user_id) {
     std::lock_guard<std::mutex> lock(mtx_);
     if (online_connections_.contains(user_id)) {
         online_connections_.erase(user_id);
-        LOG_INFO("User[{}] unregistered from push service", user_id);
+        spdlog::info("User[{}] unregistered from push service", user_id);
     }
 }
 
@@ -48,7 +48,7 @@ bool PushService::send_envelope(uint64_t target_id, const im::Envelope& envelope
         std::string serialized;
         if (envelope.SerializeToString(&serialized)) {
             conn->enqueue_message(std::move(serialized));
-            LOG_INFO("Push enqueued for User[{}], cmd={}", target_id, static_cast<int>(envelope.cmd()));
+            spdlog::info("Push enqueued for User[{}], cmd={}", target_id, static_cast<int>(envelope.cmd()));
             return true;
         }
     }

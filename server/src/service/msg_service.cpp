@@ -1,9 +1,9 @@
 #include "msg_service.h"
+#include <spdlog/spdlog.h>
 #include <cstdlib>
 #include <ctime>
 #include <string>
 #include "../dao/async_msg_writer.h"
-#include "../log/log.h"
 #include "../utils/id_generator.h"
 
 namespace {
@@ -20,7 +20,7 @@ bool EnvFlagEnabled(const char* name) {
 MsgService::MsgService(PushService* push_service) : push_service_(push_service) {
     push_persisted_ack_ = EnvFlagEnabled("TERMCHAT_PUSH_PERSISTED_ACK") || EnvFlagEnabled("ENABLE_PERSISTED_ACK_PUSH");
     AsyncMsgWriter::GetInstance()->Start();
-    LOG_INFO("MsgService persisted ACK push: {}", push_persisted_ack_ ? "enabled" : "disabled");
+    spdlog::info("MsgService persisted ACK push: {}", push_persisted_ack_ ? "enabled" : "disabled");
 }
 
 MsgService::~MsgService() { AsyncMsgWriter::GetInstance()->Stop(); }
@@ -28,7 +28,7 @@ MsgService::~MsgService() { AsyncMsgWriter::GetInstance()->Stop(); }
 void MsgService::OnMessagePersisted(uint64_t sender_id, uint64_t client_msg_id, const im::P2PMessage& msg,
                                     bool success) {
     if (!success) {
-        LOG_ERROR("P2P Message[{}] persist failed after async retries.", msg.msg_id());
+        spdlog::error("P2P Message[{}] persist failed after async retries.", msg.msg_id());
         return;
     }
 
@@ -75,7 +75,7 @@ void MsgService::send_p2p_message(uint64_t sender_id, const im::P2PMessage& req,
             resp->set_msg_id(dedup.server_msg_id);
             resp->set_success(true);
             resp->set_status(dedup.status);
-            LOG_INFO("Deduplicated P2P retry: client_msg_id={}, msg_id={}", client_msg_id, dedup.server_msg_id);
+            spdlog::info("Deduplicated P2P retry: client_msg_id={}, msg_id={}", client_msg_id, dedup.server_msg_id);
             return;
         }
     }
@@ -116,8 +116,8 @@ void MsgService::send_p2p_message(uint64_t sender_id, const im::P2PMessage& req,
                                              im::ACK_STATUS_ENQUEUED);
     }
 
-    LOG_INFO("P2P Message[{}] from User[{}] to User[{}] processed, ack_status={}.", msg_to_store.msg_id(), sender_id,
-             req.receiver_id(), static_cast<int>(resp->status()));
+    spdlog::info("P2P Message[{}] from User[{}] to User[{}] processed, ack_status={}.", msg_to_store.msg_id(),
+                 sender_id, req.receiver_id(), static_cast<int>(resp->status()));
 }
 
 void MsgService::acknowledge_message(uint64_t current_user_id, const im::MessageAck& req, im::MessageAck* resp) {
@@ -149,8 +149,8 @@ void MsgService::acknowledge_message(uint64_t current_user_id, const im::Message
     if (push_service_) {
         push_service_->push_message_ack(req.sender_id(), *resp);
     }
-    LOG_INFO("Message[{}] acked by receiver={}, sender={}, status={}.", req.msg_id(), req.receiver_id(),
-             req.sender_id(), static_cast<int>(req.status()));
+    spdlog::info("Message[{}] acked by receiver={}, sender={}, status={}.", req.msg_id(), req.receiver_id(),
+                 req.sender_id(), static_cast<int>(req.status()));
 }
 
 void MsgService::acknowledge_message_batch(uint64_t current_user_id, const im::MessageAckBatch& req,
@@ -159,7 +159,7 @@ void MsgService::acknowledge_message_batch(uint64_t current_user_id, const im::M
         im::MessageAck* ack_resp = resp->add_acks();
         acknowledge_message(current_user_id, ack, ack_resp);
     }
-    LOG_INFO("User[{}] acknowledged {} messages in batch.", current_user_id, req.acks_size());
+    spdlog::info("User[{}] acknowledged {} messages in batch.", current_user_id, req.acks_size());
 }
 
 void MsgService::sync_messages(uint64_t user_id, const im::SyncMessagesReq& req, im::SyncMessagesResp* resp) {
@@ -178,6 +178,6 @@ void MsgService::sync_messages(uint64_t user_id, const im::SyncMessagesReq& req,
     resp->set_next_ack_msg_id(page.next_ack_msg_id);
     resp->set_has_more(page.has_more);
 
-    LOG_INFO("User[{}] synced {} messages after msg_id={}, next_ack_msg_id={}, has_more={}.", user_id,
-             page.messages.size(), req.last_ack_msg_id(), page.next_ack_msg_id, page.has_more);
+    spdlog::info("User[{}] synced {} messages after msg_id={}, next_ack_msg_id={}, has_more={}.", user_id,
+                 page.messages.size(), req.last_ack_msg_id(), page.next_ack_msg_id, page.has_more);
 }

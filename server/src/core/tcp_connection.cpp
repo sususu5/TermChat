@@ -1,5 +1,6 @@
 #include "tcp_connection.h"
 #include <errno.h>
+#include <spdlog/spdlog.h>
 #include <unistd.h>
 #include <unordered_set>
 #include "../service/push_service.h"
@@ -35,7 +36,7 @@ void TcpConnection::init(int socket_fd, const sockaddr_in& addr) {
     iov_cnt_ = 0;
     user_id_ = 0;
     events_ = 0;
-    LOG_INFO("Client[{}]({}:{}) in, user_count:{}", fd_, get_ip(), get_port(), (int)user_count);
+    spdlog::info("Client[{}]({}:{}) in, user_count:{}", fd_, get_ip(), get_port(), (int)user_count);
 }
 
 void TcpConnection::close_conn() {
@@ -48,7 +49,7 @@ void TcpConnection::close_conn() {
         }
 
         close(fd_);
-        LOG_INFO("Client[{}]({}:{}) quit, user_count:{}", fd_, get_ip(), get_port(), (int)user_count);
+        spdlog::info("Client[{}]({}:{}) quit, user_count:{}", fd_, get_ip(), get_port(), (int)user_count);
     }
 }
 
@@ -79,11 +80,11 @@ bool TcpConnection::process() {
         if (is_http_request(data, len)) {
             handler_ = std::make_unique<HttpHandler>();
             conn_type_ = ConnType::HTTP;
-            LOG_INFO("Protocol determined: HTTP");
+            spdlog::info("Protocol determined: HTTP");
         } else {
             handler_ = std::make_unique<ProtobufHandler>(this, auth_service, friend_service, msg_service, thread_pool);
             conn_type_ = ConnType::PROTOBUF;
-            LOG_INFO("Protocol determined: Protobuf");
+            spdlog::info("Protocol determined: Protobuf");
         }
         protocol_determined_ = true;
     }
@@ -122,7 +123,7 @@ void TcpConnection::setup_iov_for_http() {
         iov_cnt_ = 2;
     }
 
-    LOG_DEBUG("HTTP iov setup: header={}, file={}", iov_[0].iov_len, iov_cnt_ > 1 ? iov_[1].iov_len : 0);
+    spdlog::debug("HTTP iov setup: header={}, file={}", iov_[0].iov_len, iov_cnt_ > 1 ? iov_[1].iov_len : 0);
 }
 
 size_t TcpConnection::to_write_bytes() {

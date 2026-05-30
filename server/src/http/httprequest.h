@@ -1,12 +1,12 @@
 #pragma once
 
 #include <errno.h>
+#include <spdlog/spdlog.h>
 #include <regex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include "../buffer/buffer.h"
-#include "../log/log.h"
 
 class HttpRequest {
 public:
