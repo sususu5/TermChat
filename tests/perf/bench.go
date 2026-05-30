@@ -9,12 +9,14 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	pb "termchat/build/relwithdebinfo/proto/go"
@@ -29,6 +31,7 @@ type Scenario struct {
 	ServerAddr         string  `json:"server_addr"`
 	Username           string  `json:"username"`
 	ReceiverID         uint64  `json:"receiver_id"`
+	ReceiverMode       string  `json:"receiver_mode"`
 	Clients            int     `json:"clients"`
 	MessagesPerClient  int     `json:"messages_per_client"`
 	TotalMessages      int     `json:"total_messages"`
@@ -38,6 +41,8 @@ type Scenario struct {
 	ConnectRampSeconds float64 `json:"connect_ramp_seconds,omitempty"`
 	DurationSeconds    float64 `json:"duration_seconds,omitempty"`
 	RatePerClient      float64 `json:"rate_per_client,omitempty"`
+	RateSchedule       string  `json:"rate_schedule,omitempty"`
+	RequestTimeoutMS   int64   `json:"request_timeout_ms,omitempty"`
 	Mode               string  `json:"mode"`
 	Pattern            string  `json:"pattern"`
 	GeneratedProtoDir  string  `json:"generated_proto_dir"`
@@ -57,37 +62,72 @@ type LatencyRecord struct {
 }
 
 type Summary struct {
-	Scenario           string             `json:"scenario"`
-	Valid              bool               `json:"valid"`
-	FatalError         string             `json:"fatal_error,omitempty"`
-	FirstFailureSeq    uint64             `json:"first_failure_seq,omitempty"`
-	FirstFailureClient int                `json:"first_failure_client"`
-	Clients            int                `json:"clients"`
-	MessagesPerClient  int                `json:"messages_per_client"`
-	Inflight           int                `json:"inflight"`
-	ConnectRampSeconds float64            `json:"connect_ramp_seconds,omitempty"`
-	DurationSeconds    float64            `json:"duration_seconds,omitempty"`
-	RatePerClient      float64            `json:"rate_per_client,omitempty"`
-	Mode               string             `json:"mode"`
-	RequestedMessages  int                `json:"requested_messages"`
-	CompletedMessages  int                `json:"completed_messages"`
-	Success            int                `json:"success"`
-	Failed             int                `json:"failed"`
-	SkippedPushes      int                `json:"skipped_pushes"`
-	DurationMS         int64              `json:"duration_ms"`
-	AttemptedQPS       float64            `json:"attempted_qps"`
-	SuccessQPS         float64            `json:"success_qps"`
-	LatencyMS          map[string]float64 `json:"latency_ms"`
-	Errors             map[string]int     `json:"errors"`
-	StartedAt          string             `json:"started_at"`
-	FinishedAt         string             `json:"finished_at"`
+	Scenario             string             `json:"scenario"`
+	Valid                bool               `json:"valid"`
+	FatalError           string             `json:"fatal_error,omitempty"`
+	FirstFailureSeq      uint64             `json:"first_failure_seq,omitempty"`
+	FirstFailureClient   int                `json:"first_failure_client"`
+	Clients              int                `json:"clients"`
+	MessagesPerClient    int                `json:"messages_per_client"`
+	Inflight             int                `json:"inflight"`
+	ConnectRampSeconds   float64            `json:"connect_ramp_seconds,omitempty"`
+	DurationSeconds      float64            `json:"duration_seconds,omitempty"`
+	RatePerClient        float64            `json:"rate_per_client,omitempty"`
+	RateSchedule         string             `json:"rate_schedule,omitempty"`
+	RequestTimeoutMS     int64              `json:"request_timeout_ms,omitempty"`
+	ReceiverMode         string             `json:"receiver_mode"`
+	Mode                 string             `json:"mode"`
+	RequestedMessages    int                `json:"requested_messages"`
+	CompletedMessages    int                `json:"completed_messages"`
+	Success              int                `json:"success"`
+	Failed               int                `json:"failed"`
+	SkippedPushes        int                `json:"skipped_pushes"`
+	DurationMS           int64              `json:"duration_ms"`
+	MeasurementMS        int64              `json:"measurement_ms"`
+	AttemptedQPS         float64            `json:"attempted_qps"`
+	SuccessQPS           float64            `json:"success_qps"`
+	EndToEndAttemptedQPS float64            `json:"end_to_end_attempted_qps"`
+	EndToEndSuccessQPS   float64            `json:"end_to_end_success_qps"`
+	LatencyMS            map[string]float64 `json:"latency_ms"`
+	Errors               map[string]int     `json:"errors"`
+	StartedAt            string             `json:"started_at"`
+	FinishedAt           string             `json:"finished_at"`
 }
 
 type BenchClient struct {
-	clientID      int
-	rw            *bufio.ReadWriter
-	nextSeq       uint64
-	skippedPushes int
+	clientID       int
+	userID         uint64
+	conn           net.Conn
+	rw             *bufio.ReadWriter
+	nextSeq        uint64
+	skippedPushes  int
+	receiverID     uint64
+	receiverMode   string
+	receivers      *receiverRegistry
+	requestTimeout time.Duration
+	rng            *rand.Rand
+}
+
+type receiverRegistry struct {
+	mu  sync.RWMutex
+	ids []uint64
+}
+
+func (r *receiverRegistry) add(id uint64) {
+	if id == 0 {
+		return
+	}
+	r.mu.Lock()
+	r.ids = append(r.ids, id)
+	r.mu.Unlock()
+}
+
+func (r *receiverRegistry) snapshot() []uint64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ids := make([]uint64, len(r.ids))
+	copy(ids, r.ids)
+	return ids
 }
 
 func main() {
@@ -97,9 +137,12 @@ func main() {
 	messagesPerClient := flag.Int("messages-per-client", 0, "messages to send per client, defaults to -n")
 	durationFlag := flag.Duration("duration", 0, "rate mode duration, for example 120s or 5m")
 	ratePerClient := flag.Float64("rate-per-client", 0, "rate mode target messages per second per client")
+	rateSchedule := flag.String("rate-schedule", "poisson", "rate mode send schedule: poisson or fixed")
+	requestTimeout := flag.Duration("request-timeout", 30*time.Second, "per request ACK timeout")
 	warmupMessages := flag.Int("warmup", 100, "warmup messages per client before measurement")
 	username := flag.String("username", "bench_baseline", "benchmark username prefix")
 	receiverID := flag.Uint64("receiver", 2, "P2P receiver user id")
+	receiverMode := flag.String("receiver-mode", "fixed", "receiver selection mode: fixed or random-online")
 	payloadBytes := flag.Int("payload", 256, "payload size in bytes")
 	inflight := flag.Int("inflight", 1, "max in-flight P2P requests per benchmark connection")
 	connectRamp := flag.Duration("connect-ramp", 0, "spread client connection startup over this duration, for example 30s")
@@ -123,6 +166,15 @@ func main() {
 	}
 	if *connectRamp < 0 {
 		log.Fatalf("connect-ramp must be >= 0")
+	}
+	if *receiverMode != "fixed" && *receiverMode != "random-online" {
+		log.Fatalf("receiver-mode must be fixed or random-online")
+	}
+	if *rateSchedule != "poisson" && *rateSchedule != "fixed" {
+		log.Fatalf("rate-schedule must be poisson or fixed")
+	}
+	if *requestTimeout <= 0 {
+		log.Fatalf("request-timeout must be > 0")
 	}
 	rateMode := *durationFlag > 0 || *ratePerClient > 0
 	if rateMode {
@@ -163,6 +215,7 @@ func main() {
 		ServerAddr:         *addr,
 		Username:           *username,
 		ReceiverID:         *receiverID,
+		ReceiverMode:       *receiverMode,
 		Clients:            *clients,
 		MessagesPerClient:  *messagesPerClient,
 		TotalMessages:      totalMessages,
@@ -172,6 +225,8 @@ func main() {
 		ConnectRampSeconds: connectRamp.Seconds(),
 		DurationSeconds:    durationFlag.Seconds(),
 		RatePerClient:      *ratePerClient,
+		RateSchedule:       *rateSchedule,
+		RequestTimeoutMS:   requestTimeout.Milliseconds(),
 		Mode:               mode,
 		Pattern:            pattern,
 		GeneratedProtoDir:  "build/relwithdebinfo/proto/go",
@@ -203,7 +258,7 @@ func main() {
 
 	payload := makePayload(*payloadBytes)
 	records, errorsByType, skippedPushes, duration, valid, fatalError, firstFailureSeq, firstFailureClient := runBenchmarkClients(
-		*addr, *username, *receiverID, payload, scenario, *warmupMessages)
+		*addr, *username, payload, scenario, *warmupMessages, *requestTimeout)
 
 	summary := buildSummary(scenario, records, errorsByType, skippedPushes, duration,
 		startedAt, time.Now().UTC(), valid, fatalError, firstFailureSeq, firstFailureClient)
@@ -224,6 +279,7 @@ func main() {
 	}
 	fmt.Printf("Success: %d/%d completed, requested=%d\n", summary.Success, summary.CompletedMessages, summary.RequestedMessages)
 	fmt.Printf("Attempted QPS: %.2f, Success QPS: %.2f\n", summary.AttemptedQPS, summary.SuccessQPS)
+	fmt.Printf("End-to-end QPS: attempted %.2f, success %.2f\n", summary.EndToEndAttemptedQPS, summary.EndToEndSuccessQPS)
 	fmt.Printf("p50/p95/p99/p999 latency: %.3f / %.3f / %.3f / %.3f ms\n",
 		summary.LatencyMS["p50"], summary.LatencyMS["p95"], summary.LatencyMS["p99"], summary.LatencyMS["p999"])
 	fmt.Printf("Results written to %s\n", *outDir)
@@ -239,26 +295,37 @@ type clientResult struct {
 	firstFailureSeq uint64
 }
 
-func runBenchmarkClients(addr string, usernamePrefix string, receiverID uint64, payload []byte, scenario Scenario,
-	warmupMessages int) ([]LatencyRecord, map[string]int, int, time.Duration, bool, string, uint64, int) {
+func runBenchmarkClients(addr string, usernamePrefix string, payload []byte, scenario Scenario,
+	warmupMessages int, requestTimeout time.Duration) ([]LatencyRecord, map[string]int, int, time.Duration, bool, string, uint64, int) {
 	results := make(chan clientResult, scenario.Clients)
-	ready := make(chan struct{}, scenario.Clients)
+	online := make(chan struct{}, scenario.Clients)
+	warmupDone := make(chan struct{}, scenario.Clients)
+	warmupStart := make(chan struct{})
 	start := make(chan struct{})
+	receivers := &receiverRegistry{}
+	var benchmarkDeadline atomic.Int64
 	var wg sync.WaitGroup
 	wg.Add(scenario.Clients)
 
 	for clientID := 0; clientID < scenario.Clients; clientID++ {
 		go func(clientID int) {
 			defer wg.Done()
-			results <- runOneBenchmarkClient(clientID, addr, benchmarkUsername(usernamePrefix, clientID, scenario.Clients), receiverID,
-				payload, scenario, warmupMessages, ready, start)
+			results <- runOneBenchmarkClient(clientID, addr, benchmarkUsername(usernamePrefix, clientID, scenario.Clients), payload,
+				scenario, warmupMessages, receivers, requestTimeout, online, warmupStart, warmupDone, start, &benchmarkDeadline)
 		}(clientID)
 	}
 
 	for i := 0; i < scenario.Clients; i++ {
-		<-ready
+		<-online
+	}
+	close(warmupStart)
+	for i := 0; i < scenario.Clients; i++ {
+		<-warmupDone
 	}
 	benchStart := time.Now()
+	if scenario.Mode == "rate_limited" {
+		benchmarkDeadline.Store(benchStart.Add(time.Duration(scenario.DurationSeconds * float64(time.Second))).UnixNano())
+	}
 	close(start)
 	wg.Wait()
 	duration := time.Since(benchStart)
@@ -300,8 +367,9 @@ func runBenchmarkClients(addr string, usernamePrefix string, receiverID uint64, 
 	return allRecords, errorsByType, skippedPushes, duration, valid, fatalError, firstFailureSeq, firstFailureClient
 }
 
-func runOneBenchmarkClient(clientID int, addr string, username string, receiverID uint64, payload []byte,
-	scenario Scenario, warmupMessages int, ready chan<- struct{}, start <-chan struct{}) clientResult {
+func runOneBenchmarkClient(clientID int, addr string, username string, payload []byte, scenario Scenario,
+	warmupMessages int, receivers *receiverRegistry, requestTimeout time.Duration, online chan<- struct{},
+	warmupStart <-chan struct{}, warmupDone chan<- struct{}, start <-chan struct{}, benchmarkDeadline *atomic.Int64) clientResult {
 	result := clientResult{
 		clientID: clientID,
 		errors:   map[string]int{},
@@ -317,37 +385,64 @@ func runOneBenchmarkClient(clientID int, addr string, username string, receiverI
 		result.valid = false
 		result.fatalError = fmt.Sprintf("connect failed: %v", err)
 		result.errors[classifyError(err)]++
-		ready <- struct{}{}
+		online <- struct{}{}
+		warmupDone <- struct{}{}
 		return result
 	}
 	defer conn.Close()
 
 	client := &BenchClient{
-		clientID: clientID,
-		rw:       bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
-		nextSeq:  1,
+		clientID:       clientID,
+		conn:           conn,
+		rw:             bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
+		nextSeq:        1,
+		receiverID:     scenario.ReceiverID,
+		receiverMode:   scenario.ReceiverMode,
+		receivers:      receivers,
+		requestTimeout: requestTimeout,
+		rng:            rand.New(rand.NewSource(time.Now().UnixNano() + int64(clientID)*7919)),
 	}
 	if err := client.handshake(username); err != nil {
 		result.valid = false
 		result.fatalError = fmt.Sprintf("handshake failed: %v", err)
 		result.errors[classifyError(err)]++
-		ready <- struct{}{}
+		online <- struct{}{}
+		warmupDone <- struct{}{}
+		return result
+	}
+	receivers.add(client.userID)
+	client.waitForReceiverPeer(5 * time.Second)
+	online <- struct{}{}
+
+	if err := client.waitForStart(payload, warmupStart); err != nil {
+		result.valid = false
+		result.fatalError = fmt.Sprintf("pre-warmup keepalive failed: %v", err)
+		result.errors[classifyError(err)]++
+		warmupDone <- struct{}{}
+		return result
+	}
+	if err := client.runWarmupP2P(payload, warmupMessages, scenario); err != nil {
+		result.valid = false
+		result.fatalError = err.Error()
+		result.errors[classifyError(err)]++
+		warmupDone <- struct{}{}
 		return result
 	}
 
-	for i := 0; i < warmupMessages; i++ {
-		if _, err := client.sendMeasuredP2P(receiverID, payload); err != nil {
-			result.valid = false
-			result.fatalError = fmt.Sprintf("warmup failed at %d: %v", i, err)
-			result.errors[classifyError(err)]++
-			ready <- struct{}{}
-			return result
+	warmupDone <- struct{}{}
+	if err := client.waitForStart(payload, start); err != nil {
+		result.valid = false
+		result.fatalError = fmt.Sprintf("pre-start keepalive failed: %v", err)
+		result.errors[classifyError(err)]++
+		return result
+	}
+	deadline := time.Time{}
+	if benchmarkDeadline != nil {
+		if deadlineUnixNano := benchmarkDeadline.Load(); deadlineUnixNano > 0 {
+			deadline = time.Unix(0, deadlineUnixNano)
 		}
 	}
-
-	ready <- struct{}{}
-	<-start
-	records, errorsByType, valid, fatalError, firstFailureSeq := client.runScenario(receiverID, payload, scenario)
+	records, errorsByType, valid, fatalError, firstFailureSeq := client.runScenario(payload, scenario, deadline)
 	for typ, count := range errorsByType {
 		result.errors[typ] += count
 	}
@@ -422,17 +517,114 @@ func (c *BenchClient) handshake(username string) error {
 		}
 		return fmt.Errorf("login failed: %s", resp.GetErrorMsg())
 	}
+	if resp := loginResp.GetLoginRes(); resp != nil && resp.GetUserInfo() != nil {
+		c.userID = resp.GetUserInfo().GetUserId()
+	}
 	return nil
 }
 
-func (c *BenchClient) runScenario(receiverID uint64, content []byte, scenario Scenario) ([]LatencyRecord, map[string]int, bool, string, uint64) {
+func (c *BenchClient) runScenario(content []byte, scenario Scenario, deadline time.Time) ([]LatencyRecord, map[string]int, bool, string, uint64) {
 	if scenario.Mode == "rate_limited" {
-		return c.runRateLimitedP2PBenchmark(receiverID, content, time.Duration(scenario.DurationSeconds*float64(time.Second)), scenario.RatePerClient)
+		return c.runRateLimitedP2PBenchmark(content, time.Duration(scenario.DurationSeconds*float64(time.Second)),
+			scenario.RatePerClient, scenario.RateSchedule, deadline)
 	}
-	return c.runP2PBenchmark(receiverID, content, scenario.MessagesPerClient, scenario.Inflight)
+	return c.runP2PBenchmark(content, scenario.MessagesPerClient, scenario.Inflight)
 }
 
-func (c *BenchClient) runRateLimitedP2PBenchmark(receiverID uint64, content []byte, duration time.Duration, ratePerClient float64) ([]LatencyRecord, map[string]int, bool, string, uint64) {
+func (c *BenchClient) waitForReceiverPeer(timeout time.Duration) {
+	if c.receiverMode != "random-online" || c.receivers == nil {
+		return
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		for _, receiverID := range c.receivers.snapshot() {
+			if receiverID != 0 && receiverID != c.userID {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func (c *BenchClient) waitForStart(content []byte, start <-chan struct{}) error {
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-start:
+			return nil
+		case <-ticker.C:
+			if _, err := c.sendMeasuredP2P(c.nextReceiverID(), content); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func (c *BenchClient) runWarmupP2P(content []byte, messages int, scenario Scenario) error {
+	if messages <= 0 {
+		return nil
+	}
+
+	interval := time.Duration(0)
+	if scenario.Mode == "rate_limited" && scenario.RatePerClient > 0 {
+		interval = time.Duration(float64(time.Second) / scenario.RatePerClient)
+		if interval <= 0 {
+			interval = time.Nanosecond
+		}
+	}
+
+	for i := 0; i < messages; i++ {
+		if interval > 0 {
+			var delay time.Duration
+			if scenario.RateSchedule == "poisson" {
+				delay = time.Duration(c.rng.ExpFloat64() * float64(interval))
+			} else if i == 0 {
+				delay = time.Duration(c.rng.Float64() * float64(interval))
+			} else {
+				delay = interval
+			}
+			if maxDelay := 2 * interval; delay > maxDelay {
+				delay = maxDelay
+			}
+			if delay > 0 {
+				time.Sleep(delay)
+			}
+		}
+
+		if _, err := c.sendMeasuredP2P(c.nextReceiverID(), content); err != nil {
+			return fmt.Errorf("warmup failed at %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func (c *BenchClient) nextReceiverID() uint64 {
+	if c.receiverMode != "random-online" || c.receivers == nil {
+		return c.receiverID
+	}
+
+	ids := c.receivers.snapshot()
+	if len(ids) == 0 {
+		return c.receiverID
+	}
+	for i := 0; i < 8; i++ {
+		receiverID := ids[c.rng.Intn(len(ids))]
+		if receiverID != 0 && receiverID != c.userID {
+			return receiverID
+		}
+	}
+	for _, receiverID := range ids {
+		if receiverID != 0 && receiverID != c.userID {
+			return receiverID
+		}
+	}
+	return c.receiverID
+}
+
+func (c *BenchClient) runRateLimitedP2PBenchmark(content []byte, duration time.Duration, ratePerClient float64,
+	rateSchedule string, deadline time.Time) ([]LatencyRecord, map[string]int, bool, string, uint64) {
 	records := make([]LatencyRecord, 0, int(duration.Seconds()*ratePerClient)+1)
 	errorsByType := map[string]int{}
 	valid := true
@@ -447,8 +639,15 @@ func (c *BenchClient) runRateLimitedP2PBenchmark(receiverID uint64, content []by
 	if interval <= 0 {
 		interval = time.Nanosecond
 	}
-	deadline := time.Now().Add(duration)
-	nextSend := time.Now()
+	if deadline.IsZero() {
+		deadline = time.Now().Add(duration)
+	}
+	var nextSend time.Time
+	if rateSchedule == "poisson" {
+		nextSend = time.Now().Add(time.Duration(c.rng.ExpFloat64() * float64(interval)))
+	} else {
+		nextSend = time.Now().Add(time.Duration(c.rng.Float64() * float64(interval)))
+	}
 
 	for time.Now().Before(deadline) {
 		now := time.Now()
@@ -459,7 +658,7 @@ func (c *BenchClient) runRateLimitedP2PBenchmark(receiverID uint64, content []by
 			break
 		}
 
-		record, err := c.sendMeasuredP2P(receiverID, content)
+		record, err := c.sendMeasuredP2P(c.nextReceiverID(), content)
 		if err != nil {
 			errorsByType[classifyError(err)]++
 			record.Error = err.Error()
@@ -473,12 +672,16 @@ func (c *BenchClient) runRateLimitedP2PBenchmark(receiverID uint64, content []by
 			}
 		}
 		records = append(records, record)
-		nextSend = nextSend.Add(interval)
+		if rateSchedule == "poisson" {
+			nextSend = nextSend.Add(time.Duration(c.rng.ExpFloat64() * float64(interval)))
+		} else {
+			nextSend = nextSend.Add(interval)
+		}
 	}
 	return records, errorsByType, valid, fatalError, firstFailureSeq
 }
 
-func (c *BenchClient) runP2PBenchmark(receiverID uint64, content []byte, totalMessages int, inflight int) ([]LatencyRecord, map[string]int, bool, string, uint64) {
+func (c *BenchClient) runP2PBenchmark(content []byte, totalMessages int, inflight int) ([]LatencyRecord, map[string]int, bool, string, uint64) {
 	records := make([]LatencyRecord, 0, totalMessages)
 	errorsByType := map[string]int{}
 	valid := true
@@ -487,7 +690,7 @@ func (c *BenchClient) runP2PBenchmark(receiverID uint64, content []byte, totalMe
 
 	if inflight == 1 {
 		for i := 0; i < totalMessages; i++ {
-			record, err := c.sendMeasuredP2P(receiverID, content)
+			record, err := c.sendMeasuredP2P(c.nextReceiverID(), content)
 			if err != nil {
 				errorsByType[classifyError(err)]++
 				record.Error = err.Error()
@@ -510,7 +713,7 @@ func (c *BenchClient) runP2PBenchmark(receiverID uint64, content []byte, totalMe
 	completed := 0
 	for completed < totalMessages {
 		for sent < totalMessages && len(pending) < inflight {
-			record, err := c.sendP2PRequest(receiverID, content)
+			record, err := c.sendP2PRequest(c.nextReceiverID(), content)
 			records = append(records, record)
 			pending[record.Seq] = len(records) - 1
 			sent++
@@ -653,6 +856,13 @@ func (c *BenchClient) sendMeasuredP2P(receiverID uint64, content []byte) (Latenc
 		return record, err
 	}
 
+	if c.requestTimeout > 0 && c.conn != nil {
+		if err := c.conn.SetReadDeadline(time.Now().Add(c.requestTimeout)); err != nil {
+			return record, err
+		}
+		defer c.conn.SetReadDeadline(time.Time{})
+	}
+
 	respEnv, err := c.readExpected(seq, pb.CommandType_CMD_MSG_ACK)
 	ackAt := time.Now()
 	record.AckUnix = ackAt.UnixNano()
@@ -747,42 +957,63 @@ func buildSummary(scenario Scenario, records []LatencyRecord, errors map[string]
 		}
 	}
 	failed := len(records) - success
-	attemptedQPS := 0.0
+	measurementDuration := duration.Seconds()
+	if scenario.Mode == "rate_limited" && scenario.DurationSeconds > 0 {
+		measurementDuration = scenario.DurationSeconds
+	}
+	measurementMS := int64(measurementDuration * 1000)
+
+	endToEndAttemptedQPS := 0.0
 	if duration > 0 {
-		attemptedQPS = float64(len(records)) / duration.Seconds()
+		endToEndAttemptedQPS = float64(len(records)) / duration.Seconds()
+	}
+	endToEndSuccessQPS := 0.0
+	if success > 0 && duration > 0 {
+		endToEndSuccessQPS = float64(success) / duration.Seconds()
+	}
+
+	attemptedQPS := 0.0
+	if measurementDuration > 0 {
+		attemptedQPS = float64(len(records)) / measurementDuration
 	}
 	successQPS := 0.0
-	if success > 0 && duration > 0 && scenario.Mode == "rate_limited" {
-		successQPS = float64(success) / duration.Seconds()
+	if success > 0 && scenario.Mode == "rate_limited" && measurementDuration > 0 {
+		successQPS = float64(success) / measurementDuration
 	} else if success > 0 && lastSuccessAck > firstSuccessSend {
 		successWindowSeconds := float64(lastSuccessAck-firstSuccessSend) / float64(time.Second)
 		successQPS = float64(success) / successWindowSeconds
 	}
 	return Summary{
-		Scenario:           scenario.Name,
-		Valid:              summaryValid(scenario, records, failed, valid),
-		FatalError:         fatalError,
-		FirstFailureSeq:    firstFailureSeq,
-		FirstFailureClient: firstFailureClient,
-		Clients:            scenario.Clients,
-		MessagesPerClient:  scenario.MessagesPerClient,
-		Inflight:           scenario.Inflight,
-		ConnectRampSeconds: scenario.ConnectRampSeconds,
-		DurationSeconds:    scenario.DurationSeconds,
-		RatePerClient:      scenario.RatePerClient,
-		Mode:               scenario.Mode,
-		RequestedMessages:  scenario.TotalMessages,
-		CompletedMessages:  len(records),
-		Success:            success,
-		Failed:             failed,
-		SkippedPushes:      skippedPushes,
-		DurationMS:         duration.Milliseconds(),
-		AttemptedQPS:       attemptedQPS,
-		SuccessQPS:         successQPS,
-		LatencyMS:          latencyStatsMS(latencies),
-		Errors:             errors,
-		StartedAt:          startedAt.Format(time.RFC3339Nano),
-		FinishedAt:         finishedAt.Format(time.RFC3339Nano),
+		Scenario:             scenario.Name,
+		Valid:                summaryValid(scenario, records, failed, valid),
+		FatalError:           fatalError,
+		FirstFailureSeq:      firstFailureSeq,
+		FirstFailureClient:   firstFailureClient,
+		Clients:              scenario.Clients,
+		MessagesPerClient:    scenario.MessagesPerClient,
+		Inflight:             scenario.Inflight,
+		ConnectRampSeconds:   scenario.ConnectRampSeconds,
+		DurationSeconds:      scenario.DurationSeconds,
+		RatePerClient:        scenario.RatePerClient,
+		RateSchedule:         scenario.RateSchedule,
+		RequestTimeoutMS:     scenario.RequestTimeoutMS,
+		ReceiverMode:         scenario.ReceiverMode,
+		Mode:                 scenario.Mode,
+		RequestedMessages:    scenario.TotalMessages,
+		CompletedMessages:    len(records),
+		Success:              success,
+		Failed:               failed,
+		SkippedPushes:        skippedPushes,
+		DurationMS:           duration.Milliseconds(),
+		MeasurementMS:        measurementMS,
+		AttemptedQPS:         attemptedQPS,
+		SuccessQPS:           successQPS,
+		EndToEndAttemptedQPS: endToEndAttemptedQPS,
+		EndToEndSuccessQPS:   endToEndSuccessQPS,
+		LatencyMS:            latencyStatsMS(latencies),
+		Errors:               errors,
+		StartedAt:            startedAt.Format(time.RFC3339Nano),
+		FinishedAt:           finishedAt.Format(time.RFC3339Nano),
 	}
 }
 
@@ -873,8 +1104,11 @@ func writeReport(path string, scenario Scenario, summary Summary) error {
 - Connect ramp: %.3f seconds
 - Duration: %.3f seconds
 - Rate per client: %.3f msg/s
+- Rate schedule: %s
+- Request timeout: %d ms
 - Payload: %d bytes
 - Inflight: %d
+- Receiver mode: %s
 - Pattern: %s
 
 ## Summary
@@ -883,8 +1117,12 @@ func writeReport(path string, scenario Scenario, summary Summary) error {
 - Failed: %d
 - Valid: %t
 - Fatal error: %s
+- Measurement duration: %d ms
+- End-to-end duration: %d ms
 - Attempted QPS: %.2f
 - Success QPS: %.2f
+- End-to-end attempted QPS: %.2f
+- End-to-end success QPS: %.2f
 - p50: %.3f ms
 - p95: %.3f ms
 - p99: %.3f ms
@@ -901,16 +1139,23 @@ func writeReport(path string, scenario Scenario, summary Summary) error {
 		scenario.ConnectRampSeconds,
 		scenario.DurationSeconds,
 		scenario.RatePerClient,
+		scenario.RateSchedule,
+		scenario.RequestTimeoutMS,
 		scenario.PayloadBytes,
 		scenario.Inflight,
+		scenario.ReceiverMode,
 		scenario.Pattern,
 		summary.Success,
 		summary.CompletedMessages,
 		summary.Failed,
 		summary.Valid,
 		summary.FatalError,
+		summary.MeasurementMS,
+		summary.DurationMS,
 		summary.AttemptedQPS,
 		summary.SuccessQPS,
+		summary.EndToEndAttemptedQPS,
+		summary.EndToEndSuccessQPS,
 		summary.LatencyMS["p50"],
 		summary.LatencyMS["p95"],
 		summary.LatencyMS["p99"],

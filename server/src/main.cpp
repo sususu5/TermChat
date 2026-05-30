@@ -1,6 +1,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <cstdlib>
+#include <iostream>
 #include "core/webserver.h"
 
 static Webserver* g_server = nullptr;
@@ -56,8 +57,9 @@ int main(int argc, char* argv[]) {
         const int mysql_pool_num = EnvInt("TERMCHAT_MYSQL_POOL_SIZE", 50);
         const int thread_num = EnvInt("TERMCHAT_THREAD_NUM", 40);
         const int epoll_event_num = EnvInt("TERMCHAT_EPOLL_EVENTS", 4096);
-        Webserver server(1316, 3, 60000, 3306, "root", "123456", "testdb", mysql_pool_num, thread_num, epoll_event_num,
-                         open_log, 1, 1024);
+        const int idle_timeout_ms = EnvInt("TERMCHAT_IDLE_TIMEOUT_MS", 180000);
+        Webserver server(1316, 3, idle_timeout_ms, 3306, "root", "123456", "testdb", mysql_pool_num, thread_num,
+                         epoll_event_num, open_log, 1, 1024);
         g_server = &server;
         server.Start();
         g_server = nullptr;

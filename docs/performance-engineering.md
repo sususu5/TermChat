@@ -157,6 +157,3 @@ Single-connection sequential benchmark, 10,000 messages, 256-byte payload:
 | default | 1600.94 | 0 | 2.657 ms | 8.651 ms |
 
 These numbers are DevContainer trend data. Use them to validate the effect of ACK reduction, not as final production capacity.
-
-1. 基线确立：01-baseline
-2. 保持较低的单连接压力，大量增加连接数：02-scaling
