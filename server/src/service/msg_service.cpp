@@ -19,8 +19,10 @@ bool EnvFlagEnabled(const char* name) {
 
 MsgService::MsgService(PushService* push_service) : push_service_(push_service) {
     push_persisted_ack_ = EnvFlagEnabled("TERMCHAT_PUSH_PERSISTED_ACK") || EnvFlagEnabled("ENABLE_PERSISTED_ACK_PUSH");
+    sync_client_dedup_ = !EnvFlagEnabled("TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP");
     AsyncMsgWriter::GetInstance()->Start();
     spdlog::info("MsgService persisted ACK push: {}", push_persisted_ack_ ? "enabled" : "disabled");
+    spdlog::info("MsgService synchronous client dedup: {}", sync_client_dedup_ ? "enabled" : "disabled");
 }
 
 MsgService::~MsgService() { AsyncMsgWriter::GetInstance()->Stop(); }
@@ -69,7 +71,7 @@ void MsgService::send_p2p_message(uint64_t sender_id, const im::P2PMessage& req,
     }
 
     const auto client_msg_id = req.client_msg_id();
-    if (client_msg_id != 0) {
+    if (sync_client_dedup_ && client_msg_id != 0) {
         auto dedup = msg_scylla_dao_.GetClientMsgDedup(sender_id, client_msg_id);
         if (dedup.found) {
             resp->set_msg_id(dedup.server_msg_id);
@@ -88,7 +90,7 @@ void MsgService::send_p2p_message(uint64_t sender_id, const im::P2PMessage& req,
         msg_to_store.set_timestamp(time(nullptr));
     }
 
-    if (client_msg_id != 0) {
+    if (sync_client_dedup_ && client_msg_id != 0) {
         if (!msg_scylla_dao_.UpsertClientMsgDedup(sender_id, client_msg_id, msg_to_store.msg_id(), req.receiver_id(),
                                                   im::ACK_STATUS_RECEIVED)) {
             resp->set_success(false);
@@ -111,7 +113,7 @@ void MsgService::send_p2p_message(uint64_t sender_id, const im::P2PMessage& req,
     resp->set_sender_id(sender_id);
     resp->set_receiver_id(req.receiver_id());
 
-    if (client_msg_id != 0 && delivered) {
+    if (sync_client_dedup_ && client_msg_id != 0 && delivered) {
         msg_scylla_dao_.UpsertClientMsgDedup(sender_id, client_msg_id, msg_to_store.msg_id(), req.receiver_id(),
                                              im::ACK_STATUS_ENQUEUED);
     }

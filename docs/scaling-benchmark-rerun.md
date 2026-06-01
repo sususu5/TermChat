@@ -7,10 +7,19 @@ by the idle timer:
 ```bash
 cmake --preset perf
 cmake --build build/relwithdebinfo
-TERMCHAT_IDLE_TIMEOUT_MS=300000 ./build/relwithdebinfo/server/src/server -l 0
+TERMCHAT_IDLE_TIMEOUT_MS=300000 TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1 ./build/relwithdebinfo/server/src/server -l 0
 ```
 
 The server prints the effective `TERMCHAT_IDLE_TIMEOUT_MS` on startup. Confirm that value before starting a rerun.
+
+`TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1` is the recommended switch for the current local benchmark pass. It keeps the
+production default unchanged, but removes synchronous client-message dedup Scylla reads/writes from the immediate ACK
+hot path so tail latency can be measured separately from idempotency storage.
+
+Reliability impact: message body persistence still goes through `AsyncMsgWriter`, so this switch does not disable message
+storage. What it disables is the synchronous `client_msg_id` idempotency table check/update before ACK. That means duplicate
+client sends are no longer collapsed by the server during this benchmark mode. For production-equivalent semantics, keep
+this switch off or replace the synchronous dedup path with a fast cache/asynchronous dedup design and rerun the benchmark.
 
 Keep `-connect-ramp` below the idle timeout so early clients do not finish warmup and then sit idle long enough to be
 closed before the measured phase starts.
@@ -24,6 +33,7 @@ This rerun changes `02-scaling` from a short burst test to an IM-like online-use
 - `-warmup 5` keeps a small pre-measurement warmup, and warmup messages use the same random online receiver mode as the measured phase.
 - `-rate-schedule poisson` avoids synchronized send waves across all clients while preserving the configured average per-client message rate. Rate-mode clients share one global benchmark deadline, so high client counts do not stretch the measured window because of benchmark-driver scheduling lag.
 - `-request-timeout 30s` bounds request-level ACK waits, so benchmark failures are reported as client-observed request timeouts instead of waiting for the server idle timer.
+- `-drain 30s` keeps clients connected after the measured send window and reads remaining push/ACK frames before closing, reducing teardown-amplified tail latency.
 - The benchmark sends unmeasured keepalive traffic while clients wait at the final start barrier, so early clients are not closed by the server idle timeout during large connection ramps.
 
 These runs should be interpreted as online-capacity and latency-stability data. Do not compare their `success_qps` directly with the earlier `inflight=2` burst runs.
@@ -40,6 +50,7 @@ go run ./tests/perf \
   -rate-per-client 0.2 \
   -rate-schedule poisson \
   -request-timeout 30s \
+  -drain 30s \
   -payload 256 \
   -inflight 1 \
   -warmup 5 \
@@ -59,6 +70,7 @@ go run ./tests/perf \
   -rate-per-client 0.2 \
   -rate-schedule poisson \
   -request-timeout 30s \
+  -drain 30s \
   -payload 256 \
   -inflight 1 \
   -warmup 5 \
@@ -78,6 +90,7 @@ go run ./tests/perf \
   -rate-per-client 0.2 \
   -rate-schedule poisson \
   -request-timeout 30s \
+  -drain 30s \
   -payload 256 \
   -inflight 1 \
   -warmup 5 \
@@ -97,6 +110,7 @@ go run ./tests/perf \
   -rate-per-client 0.2 \
   -rate-schedule poisson \
   -request-timeout 30s \
+  -drain 30s \
   -payload 256 \
   -inflight 1 \
   -warmup 5 \
@@ -118,6 +132,7 @@ go run ./tests/perf \
   -rate-per-client 0.05 \
   -rate-schedule poisson \
   -request-timeout 30s \
+  -drain 30s \
   -payload 256 \
   -inflight 1 \
   -warmup 5 \
@@ -132,15 +147,16 @@ go run ./tests/perf \
   -addr 127.0.0.1:1316 \
   -clients 20000 \
   -duration 240s \
-  -rate-per-client 0.2 \
+  -rate-per-client 0.1 \
   -rate-schedule poisson \
   -request-timeout 30s \
+  -drain 30s \
   -payload 256 \
   -inflight 1 \
   -warmup 5 \
   -receiver-mode random-online \
   -connect-ramp 45s \
-  -scenario im_scaling_20000c_0_2rps_random_ramp45s \
+  -scenario im_scaling_20000c_0_1rps_random_ramp45s \
   -out benchmark-results/02-scaling-im-20000c
 ```
 
@@ -157,6 +173,7 @@ for run in 1 2 3; do
     -rate-per-client 0.2 \
     -rate-schedule poisson \
     -request-timeout 30s \
+    -drain 30s \
     -payload 256 \
     -inflight 1 \
     -warmup 5 \

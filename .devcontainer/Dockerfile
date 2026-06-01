@@ -34,6 +34,7 @@ RUN apt-get update && \
             cmake \
             git \
             curl \
+            iproute2 \
             nodejs \
             npm \
             zip \

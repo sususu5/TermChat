@@ -23,4 +23,5 @@ private:
     PushService* push_service_;
     MsgScyllaDao msg_scylla_dao_;
     bool push_persisted_ack_ = false;
+    bool sync_client_dedup_ = true;
 };
