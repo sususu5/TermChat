@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OUT_DIR="${OUT_DIR:-benchmark-results/02-scaling-im-25000c}"
+OUT_DIR="${OUT_DIR:-benchmark-results/02-scaling-im-20000c}"
 MONITOR_DIR="${MONITOR_DIR:-${OUT_DIR}/monitor}"
 INTERVAL="${MONITOR_INTERVAL:-1}"
 
@@ -111,7 +111,7 @@ fi
 
 go run ./tests/perf \
     -addr 127.0.0.1:1316 \
-    -clients 25000 \
+    -clients 20000 \
     -duration 240s \
     -rate-per-client 0.1 \
     -rate-schedule poisson \
@@ -122,7 +122,7 @@ go run ./tests/perf \
     -warmup 5 \
     -receiver-mode random-online \
     -connect-ramp 45s \
-    -scenario im_scaling_25000c_0_1rps_random_ramp45s \
+    -scenario im_scaling_20000c_0_1rps_random_ramp45s \
     -out "${OUT_DIR}" 2>&1 | tee "${BENCH_LOG}"
 
 {

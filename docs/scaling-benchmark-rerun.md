@@ -7,19 +7,24 @@ by the idle timer:
 ```bash
 cmake --preset perf
 cmake --build build/relwithdebinfo
-TERMCHAT_IDLE_TIMEOUT_MS=300000 TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1 ./build/relwithdebinfo/server/src/server -l 0
+TERMCHAT_IDLE_TIMEOUT_MS=300000 TERMCHAT_FAST_CLIENT_DEDUP=1 ./build/relwithdebinfo/server/src/server -l 0
 ```
 
 The server prints the effective `TERMCHAT_IDLE_TIMEOUT_MS` on startup. Confirm that value before starting a rerun.
 
-`TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1` is the recommended switch for the current local benchmark pass. It keeps the
-production default unchanged, but removes synchronous client-message dedup Scylla reads/writes from the immediate ACK
-hot path so tail latency can be measured separately from idempotency storage.
+`TERMCHAT_FAST_CLIENT_DEDUP=1` is the recommended switch for the current local benchmark pass. It keeps
+`client_msg_id` retry idempotency in a sharded in-memory cache, returns duplicate retries from that cache, and persists
+the dedup state to Scylla asynchronously after message persistence. This removes synchronous client-message dedup
+Scylla reads/writes from the immediate ACK hot path while preserving runtime duplicate suppression.
 
 Reliability impact: message body persistence still goes through `AsyncMsgWriter`, so this switch does not disable message
-storage. What it disables is the synchronous `client_msg_id` idempotency table check/update before ACK. That means duplicate
-client sends are no longer collapsed by the server during this benchmark mode. For production-equivalent semantics, keep
-this switch off or replace the synchronous dedup path with a fast cache/asynchronous dedup design and rerun the benchmark.
+storage. Compared with the original synchronous Scylla dedup path, it changes crash-recovery semantics: if the server
+crashes after ACK but before asynchronous dedup persistence completes, a retry after restart may not be recognized as a
+duplicate. For strict crash-proof idempotency, add a durable local WAL or keep the synchronous path.
+
+`TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1` remains a benchmark isolation switch that disables the synchronous Scylla dedup
+checks without providing the fast in-memory dedup replacement. Prefer `TERMCHAT_FAST_CLIENT_DEDUP=1` for production-like
+performance runs.
 
 Keep `-connect-ramp` below the idle timeout so early clients do not finish warmup and then sit idle long enough to be
 closed before the measured phase starts.

@@ -100,12 +100,12 @@ This reduces connection storm effects. Keep the server idle timeout above the fu
 Recommended server startup for the current local benchmark pass:
 
 ```bash
-TERMCHAT_IDLE_TIMEOUT_MS=300000 TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1 ./build/relwithdebinfo/server/src/server -l 0
+TERMCHAT_IDLE_TIMEOUT_MS=300000 TERMCHAT_FAST_CLIENT_DEDUP=1 ./build/relwithdebinfo/server/src/server -l 0
 ```
 
-Use this mode when measuring the optimized ACK hot path. It disables synchronous `client_msg_id` dedup storage in front
-of the immediate ACK, but keeps async message persistence enabled. For a production-equivalent reliability benchmark,
-run without `TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1` or implement a fast cache/asynchronous dedup replacement first.
+Use this mode when measuring the production-like optimized ACK hot path. It keeps runtime `client_msg_id` idempotency in
+a sharded in-memory cache and persists dedup state asynchronously, so the immediate ACK no longer waits for Scylla dedup
+reads/writes. For strict crash-proof idempotency after ACK, add a durable local WAL or keep the synchronous path.
 
 ## Result Interpretation
 
@@ -383,8 +383,8 @@ Risk:
 Fix direction:
 
 - Decide ACK and idempotency semantics explicitly.
-- For benchmark isolation, run the server with `TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1` to remove synchronous dedup storage from the ACK hot path.
-- If this eliminates timeouts, keep production dedup enabled by default and redesign dedup as a cache/async path before claiming production-equivalent numbers.
+- For production-like optimized benchmarks, run the server with `TERMCHAT_FAST_CLIENT_DEDUP=1` to use sharded in-memory dedup plus asynchronous Scylla persistence.
+- For benchmark isolation only, `TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1` removes synchronous dedup storage without the fast cache replacement.
 - Tune DB connection pools and request timeouts.
 - Batch writes where safe.
 - Add per-stage latency logs around persistence and dedup.
@@ -541,7 +541,7 @@ fixes from real server-side optimizations.
 | Stale ACK fix verified | `skipped_stale_acks` added, unknown cascade removed | 20k clients, 0.1 msg/s, 240s | false | timeout=3 | 480679/480682 | 2002.83 | 0.926 / 15.567 / 60.047 / 150.834 ms | Benchmark ACK sequencing issue fixed; remaining failures were real timeouts. |
 | Monitored run | `top`, `vmstat`, `ss` collection | 20k clients, 0.1 msg/s, 240s | false | timeout=4, warmup_timeout=1 | 480608/480612 | 2002.53 | 1.331 / 205.271 / 880.868 / 2179.416 ms | Failures occurred with stable connections; local tail latency visible. |
 | Drain added | `-drain 30s` keeps clients connected after measured send window | 20k clients, 0.1 msg/s, 240s | false | timeout=2, warmup_timeout=1 | 480794/480796 | 2003.31 | 1.526 / 515.214 / 1443.359 / 2422.530 ms | Teardown amplification reduced but did not remove server-side tail latency. |
-| Sync dedup disabled for benchmark | `TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1` removes synchronous Scylla dedup from ACK hot path | 20k clients, 0.1 msg/s, 240s | true | warmup_timeout=1 only | 480475/480475 | 2001.98 | 0.225 / 3.581 / 36.485 / 129.129 ms | Official measured window became clean; synchronous dedup was the dominant tail source. |
+| Sync dedup disabled for isolation | `TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1` removes synchronous Scylla dedup from ACK hot path | 20k clients, 0.1 msg/s, 240s | true | warmup_timeout=1 only | 480475/480475 | 2001.98 | 0.225 / 3.581 / 36.485 / 129.129 ms | Official measured window became clean; synchronous dedup was the dominant tail source. |
 | Local overload attempt | Increased client count and throughput too far for local driver | 30k clients, 0.2 msg/s, 240s | no result | process killed | none | none | none | Go load generator/container likely hit resource limits; not a server capacity result. |
 
 Notes:
@@ -549,8 +549,8 @@ Notes:
 - `warmup_timeout=1` is a pre-measurement recovery event. It should be investigated, but it is separate from official
   measured request failures when `summary.valid` is true.
 - QPS values after the denominator fix should use measurement-window `Success QPS`, not end-to-end QPS.
-- The optimized 2,000 msg/s result is valid for the ACK hot path with synchronous dedup disabled. It should not be
-  described as production-equivalent idempotency unless a replacement dedup design is enabled.
+- The optimized 2,000 msg/s result was first validated with synchronous dedup disabled. Re-run it with
+  `TERMCHAT_FAST_CLIENT_DEDUP=1` before describing it as fast runtime idempotency.
 
 ## Tuning Validation Result
 
@@ -562,20 +562,29 @@ The P2P send path was then inspected. `MsgService::send_p2p_message` performed s
 dedup reads and writes before returning the immediate ACK. Because the benchmark sends a unique `client_msg_id` for every
 message and does not retry, this added storage reads/writes to every ACK in the measured hot path.
 
-A benchmark-only switch was added and should be enabled for the current optimized benchmark pass:
+Two optimized modes now exist:
 
 ```bash
+TERMCHAT_FAST_CLIENT_DEDUP=1
 TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1
 ```
 
-Reliability impact:
+Use `TERMCHAT_FAST_CLIENT_DEDUP=1` for production-like performance runs. It keeps runtime duplicate suppression by
+reserving `(sender_id, client_msg_id)` in a sharded memory cache and returns the same ACK for duplicate retries. Dedup
+state is persisted to Scylla asynchronously after message persistence.
+
+Use `TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1` only for isolation. It removes synchronous dedup storage but does not provide
+the in-memory duplicate suppression replacement.
+
+Reliability impact of fast dedup:
 
 - It does not disable async message persistence; message bodies are still enqueued to `AsyncMsgWriter`.
-- It disables the synchronous `client_msg_id` dedup table read/write before the immediate ACK.
-- Duplicate client retries can produce duplicate messages in this mode unless handled elsewhere.
-- Production should keep synchronous dedup enabled by default, or replace it with a fast cache/asynchronous dedup design.
+- It keeps duplicate suppression while the process is running.
+- It removes synchronous `client_msg_id` dedup table read/write before the immediate ACK.
+- If the server crashes after ACK but before async dedup persistence completes, a retry after restart may not be
+  recognized as duplicate. Strict crash-proof idempotency needs a durable local WAL or the original synchronous path.
 
-With the server started as:
+For isolation, with the server started as:
 
 ```bash
 TERMCHAT_IDLE_TIMEOUT_MS=300000 TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1 ./build/relwithdebinfo/server/src/server -l 0
@@ -610,15 +619,15 @@ Conclusion:
 - The previous official measurement timeouts were primarily caused by synchronous ScyllaDB client-message dedup on the
   immediate ACK hot path.
 - Removing that synchronous storage work reduced p99 latency from hundreds of milliseconds/seconds-level tails to about
-  36ms in this local run, and eliminated official measurement failures at about 2,000 msg/s.
-- This result is a valid benchmark of the optimized ACK hot path, but it is not identical to production idempotency
-  semantics unless duplicate client messages are handled by another fast path.
+  36ms in this local isolation run, and eliminated official measurement failures at about 2,000 msg/s.
+- This result is a valid isolation benchmark of the optimized ACK hot path. The next validation step is to reproduce it
+  with `TERMCHAT_FAST_CLIENT_DEDUP=1`, which preserves runtime idempotency while keeping Scylla off the immediate ACK
+  path.
 
 Production follow-up:
 
-- Keep synchronous dedup enabled by default for correctness.
-- Replace the synchronous storage dedup path with an in-memory or sharded short-TTL dedup cache backed by asynchronous
-  persistence.
+- Keep synchronous dedup available as the conservative fallback.
+- Use `TERMCHAT_FAST_CLIENT_DEDUP=1` to validate the sharded short-TTL dedup cache backed by asynchronous persistence.
 - Keep Scylla dedup writes asynchronous or off the immediate ACK path.
 - Add slow-stage logs for dedup, push enqueue, and ACK enqueue to verify this remains true under cloud benchmarks.
 
@@ -640,15 +649,15 @@ Optimized the P2P ACK hot path by removing synchronous ScyllaDB dedup from the m
 connection random-message benchmark to about 2,000 msg/s with 100% measured success and p99 latency around 36ms.
 ```
 
-Be precise: the 2,000 msg/s number is valid for the optimized ACK hot path with `TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1`.
-For production-equivalent semantics, either keep the 1,000 msg/s stable line or implement an asynchronous/cache-backed
-dedup design and rerun the benchmark.
+Be precise: the earlier 2,000 msg/s number was validated with `TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1`; after the fast
+dedup implementation, re-run and report the number with `TERMCHAT_FAST_CLIENT_DEDUP=1` for runtime idempotency semantics.
+Strict crash-proof idempotency still requires a durable WAL or the original synchronous path.
 
 ## Practical Next Steps
 
-1. Implement production-grade fast dedup: short-TTL in-memory/sharded cache plus asynchronous Scylla persistence.
-2. Rerun `20k * 0.1 msg/s` with production-equivalent dedup enabled.
-3. Try `20k * 0.2 msg/s` only after the 2,000 msg/s run is stable without benchmark-only shortcuts.
+1. Rerun `20k * 0.1 msg/s` with `TERMCHAT_FAST_CLIENT_DEDUP=1`.
+2. Compare it against the `TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1` isolation result.
+3. Try `25k * 0.08`, `20k * 0.125`, and then `25k * 0.1` with fast dedup enabled.
 4. Add server-side P2P stage timing logs before further tuning.
 5. If CPU is high during failures, capture `perf` and flamegraph data.
 6. If CPU is low during failures, inspect lock waits, DB tail latency, and output queue behavior.

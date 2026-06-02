@@ -15,14 +15,25 @@ bool EnvFlagEnabled(const char* name) {
     const std::string flag(value);
     return flag == "1" || flag == "true" || flag == "TRUE" || flag == "on" || flag == "ON";
 }
+
+void FillDedupAck(uint64_t sender_id, const ClientDedupCache::Entry& entry, im::MessageAck* resp) {
+    resp->set_msg_id(entry.server_msg_id);
+    resp->set_success(true);
+    resp->set_status(entry.status);
+    resp->set_sender_id(sender_id);
+    resp->set_receiver_id(entry.receiver_id);
+}
 }  // namespace
 
 MsgService::MsgService(PushService* push_service) : push_service_(push_service) {
     push_persisted_ack_ = EnvFlagEnabled("TERMCHAT_PUSH_PERSISTED_ACK") || EnvFlagEnabled("ENABLE_PERSISTED_ACK_PUSH");
-    sync_client_dedup_ = !EnvFlagEnabled("TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP");
+    const bool disable_sync_dedup = EnvFlagEnabled("TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP");
+    fast_client_dedup_ = !disable_sync_dedup && EnvFlagEnabled("TERMCHAT_FAST_CLIENT_DEDUP");
+    sync_client_dedup_ = !disable_sync_dedup && !fast_client_dedup_;
     AsyncMsgWriter::GetInstance()->Start();
     spdlog::info("MsgService persisted ACK push: {}", push_persisted_ack_ ? "enabled" : "disabled");
     spdlog::info("MsgService synchronous client dedup: {}", sync_client_dedup_ ? "enabled" : "disabled");
+    spdlog::info("MsgService fast client dedup cache: {}", fast_client_dedup_ ? "enabled" : "disabled");
 }
 
 MsgService::~MsgService() { AsyncMsgWriter::GetInstance()->Stop(); }
@@ -32,6 +43,10 @@ void MsgService::OnMessagePersisted(uint64_t sender_id, uint64_t client_msg_id, 
     if (!success) {
         spdlog::error("P2P Message[{}] persist failed after async retries.", msg.msg_id());
         return;
+    }
+
+    if (fast_client_dedup_ && client_msg_id != 0) {
+        client_dedup_cache_.UpdateStatus(sender_id, client_msg_id, msg.msg_id(), im::ACK_STATUS_PERSISTED);
     }
 
     if (client_msg_id != 0) {
@@ -90,6 +105,23 @@ void MsgService::send_p2p_message(uint64_t sender_id, const im::P2PMessage& req,
         msg_to_store.set_timestamp(time(nullptr));
     }
 
+    if (fast_client_dedup_ && client_msg_id != 0) {
+        const auto reserve = client_dedup_cache_.Reserve(sender_id, client_msg_id, msg_to_store.msg_id(),
+                                                         req.receiver_id(), im::ACK_STATUS_RECEIVED);
+        if (reserve.state == ClientDedupCache::ReserveState::kDuplicate) {
+            FillDedupAck(sender_id, reserve.entry, resp);
+            spdlog::info("Fast deduplicated P2P retry: client_msg_id={}, msg_id={}", client_msg_id,
+                         reserve.entry.server_msg_id);
+            return;
+        }
+        if (reserve.state == ClientDedupCache::ReserveState::kConflict) {
+            resp->set_success(false);
+            resp->set_error_msg("Conflicting duplicate client_msg_id");
+            resp->set_status(im::ACK_STATUS_UNKNOWN);
+            return;
+        }
+    }
+
     if (sync_client_dedup_ && client_msg_id != 0) {
         if (!msg_scylla_dao_.UpsertClientMsgDedup(sender_id, client_msg_id, msg_to_store.msg_id(), req.receiver_id(),
                                                   im::ACK_STATUS_RECEIVED)) {
@@ -112,6 +144,11 @@ void MsgService::send_p2p_message(uint64_t sender_id, const im::P2PMessage& req,
     resp->set_status(delivered ? im::ACK_STATUS_ENQUEUED : im::ACK_STATUS_RECEIVED);
     resp->set_sender_id(sender_id);
     resp->set_receiver_id(req.receiver_id());
+
+    if (fast_client_dedup_ && client_msg_id != 0) {
+        client_dedup_cache_.UpdateStatus(sender_id, client_msg_id, msg_to_store.msg_id(),
+                                         delivered ? im::ACK_STATUS_ENQUEUED : im::ACK_STATUS_RECEIVED);
+    }
 
     if (sync_client_dedup_ && client_msg_id != 0 && delivered) {
         msg_scylla_dao_.UpsertClientMsgDedup(sender_id, client_msg_id, msg_to_store.msg_id(), req.receiver_id(),

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include "../dao/msg_scylla_dao.h"
+#include "client_dedup_cache.h"
 #include "message_service.pb.h"
 #include "push_service.h"
 
@@ -22,6 +23,8 @@ private:
 
     PushService* push_service_;
     MsgScyllaDao msg_scylla_dao_;
+    ClientDedupCache client_dedup_cache_;
     bool push_persisted_ack_ = false;
+    bool fast_client_dedup_ = false;
     bool sync_client_dedup_ = true;
 };
