@@ -1,17 +1,21 @@
 #pragma once
 
+#include <array>
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
+#include "../core/mpsc_queue.h"
 #include "protocol.pb.h"
 
 class TcpConnection;
 
 class PushService {
 public:
-    PushService() = default;
-    ~PushService() = default;
+    PushService();
+    ~PushService();
 
     // Session Management
     void add_client(uint64_t user_id, TcpConnection* conn);
@@ -29,8 +33,28 @@ public:
     void push_to_user(uint64_t user_id, std::string data);
 
 private:
-    std::mutex mtx_;
-    std::unordered_map<uint64_t, TcpConnection*> online_connections_;
+    struct ConnectionShard {
+        std::mutex mutex;
+        std::unordered_map<uint64_t, TcpConnection*> online_connections;
+    };
 
+    struct PushItem {
+        uint64_t user_id{0};
+        std::string data;
+    };
+
+    static constexpr size_t kShardCount = 128;
+    static constexpr size_t kMaxBatchSize = 1024;
+
+    std::array<ConnectionShard, kShardCount> shards_;
+    MPSCQueue<PushItem> push_queue_;
+    std::thread flush_worker_;
+    std::atomic<bool> running_{false};
+
+    ConnectionShard& ShardFor(uint64_t user_id);
+    TcpConnection* FindConnection(uint64_t user_id);
     bool send_envelope(uint64_t receiver_id, const im::Envelope& envelope);
+    bool enqueue_serialized(uint64_t user_id, std::string data);
+    void FlushLoop();
+    void FlushPending(size_t max_count);
 };

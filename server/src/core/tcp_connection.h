@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <vector>
 #include "../buffer/buffer.h"
 #include "../pool/threadpool.h"
 #include "mpsc_queue.h"
@@ -66,6 +67,7 @@ public:
 
     // Message queue for push service
     void enqueue_message(std::string data);
+    void enqueue_messages(std::vector<std::string> messages);
     bool flush_pending_to_buffer();
     bool has_pending_messages() const { return !outgoing_queue_.empty(); }
 

@@ -210,13 +210,33 @@ ssize_t TcpConnection::write(int* error_code) {
 }
 
 void TcpConnection::enqueue_message(std::string data) {
-    std::string framed;
-    uint32_t msg_len = htonl(static_cast<uint32_t>(data.size()));
-    framed.append(reinterpret_cast<char*>(&msg_len), 4);
-    framed.append(data);
+    std::vector<std::string> messages;
+    messages.emplace_back(std::move(data));
+    enqueue_messages(std::move(messages));
+}
 
-    outgoing_queue_.enqueue(std::move(framed));
-    notify_writable();
+void TcpConnection::enqueue_messages(std::vector<std::string> messages) {
+    if (messages.empty()) {
+        return;
+    }
+
+    const bool should_notify = outgoing_queue_.empty();
+    for (auto& data : messages) {
+        if (data.empty()) {
+            continue;
+        }
+
+        std::string framed;
+        framed.reserve(sizeof(uint32_t) + data.size());
+        uint32_t msg_len = htonl(static_cast<uint32_t>(data.size()));
+        framed.append(reinterpret_cast<char*>(&msg_len), 4);
+        framed.append(data);
+        outgoing_queue_.enqueue(std::move(framed));
+    }
+
+    if (should_notify) {
+        notify_writable();
+    }
 }
 
 bool TcpConnection::flush_pending_to_buffer() {

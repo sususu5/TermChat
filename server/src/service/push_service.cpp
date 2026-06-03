@@ -1,19 +1,38 @@
 #include "push_service.h"
 #include <spdlog/spdlog.h>
+#include <chrono>
 #include <ctime>
+#include <unordered_map>
 #include "../core/tcp_connection.h"
 #include "protocol.pb.h"
 
+PushService::PushService() {
+    running_.store(true, std::memory_order_release);
+    flush_worker_ = std::thread(&PushService::FlushLoop, this);
+}
+
+PushService::~PushService() {
+    running_.store(false, std::memory_order_release);
+    if (flush_worker_.joinable()) {
+        flush_worker_.join();
+    }
+    while (!push_queue_.empty()) {
+        FlushPending(kMaxBatchSize);
+    }
+}
+
 void PushService::add_client(uint64_t user_id, TcpConnection* conn) {
-    std::lock_guard<std::mutex> lock(mtx_);
-    online_connections_[user_id] = conn;
+    auto& shard = ShardFor(user_id);
+    std::lock_guard<std::mutex> lock(shard.mutex);
+    shard.online_connections[user_id] = conn;
     spdlog::info("User[{}] registered for push service", user_id);
 }
 
 void PushService::remove_client(uint64_t user_id) {
-    std::lock_guard<std::mutex> lock(mtx_);
-    if (online_connections_.contains(user_id)) {
-        online_connections_.erase(user_id);
+    auto& shard = ShardFor(user_id);
+    std::lock_guard<std::mutex> lock(shard.mutex);
+    if (shard.online_connections.contains(user_id)) {
+        shard.online_connections.erase(user_id);
         spdlog::info("User[{}] unregistered from push service", user_id);
     }
 }
@@ -36,21 +55,14 @@ void PushService::push_friend_req(uint64_t req_id, uint64_t sender_id, const std
 }
 
 bool PushService::send_envelope(uint64_t target_id, const im::Envelope& envelope) {
-    TcpConnection* conn = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(mtx_);
-        if (online_connections_.contains(target_id)) {
-            conn = online_connections_.at(target_id);
-        }
+    std::string serialized;
+    if (!envelope.SerializeToString(&serialized)) {
+        return false;
     }
 
-    if (conn) {
-        std::string serialized;
-        if (envelope.SerializeToString(&serialized)) {
-            conn->enqueue_message(std::move(serialized));
-            spdlog::info("Push enqueued for User[{}], cmd={}", target_id, static_cast<int>(envelope.cmd()));
-            return true;
-        }
+    if (enqueue_serialized(target_id, std::move(serialized))) {
+        spdlog::info("Push enqueued for User[{}], cmd={}", target_id, static_cast<int>(envelope.cmd()));
+        return true;
     }
     return false;
 }
@@ -91,16 +103,57 @@ bool PushService::push_message_ack(uint64_t user_id, const im::MessageAck& ack) 
     return send_envelope(user_id, envelope);
 }
 
-void PushService::push_to_user(uint64_t user_id, std::string data) {
-    TcpConnection* conn = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(mtx_);
-        if (online_connections_.contains(user_id)) {
-            conn = online_connections_.at(user_id);
-        }
+void PushService::push_to_user(uint64_t user_id, std::string data) { enqueue_serialized(user_id, std::move(data)); }
+
+PushService::ConnectionShard& PushService::ShardFor(uint64_t user_id) {
+    return shards_[std::hash<uint64_t>{}(user_id) % shards_.size()];
+}
+
+TcpConnection* PushService::FindConnection(uint64_t user_id) {
+    auto& shard = ShardFor(user_id);
+    std::lock_guard<std::mutex> lock(shard.mutex);
+    auto it = shard.online_connections.find(user_id);
+    if (it == shard.online_connections.end()) {
+        return nullptr;
+    }
+    return it->second;
+}
+
+bool PushService::enqueue_serialized(uint64_t user_id, std::string data) {
+    if (user_id == 0 || data.empty() || !FindConnection(user_id)) {
+        return false;
     }
 
-    if (conn) {
-        conn->enqueue_message(std::move(data));
+    push_queue_.enqueue(PushItem{user_id, std::move(data)});
+    return true;
+}
+
+void PushService::FlushLoop() {
+    while (running_.load(std::memory_order_acquire)) {
+        FlushPending(kMaxBatchSize);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+void PushService::FlushPending(size_t max_count) {
+    std::vector<PushItem> items;
+    items.reserve(max_count);
+    push_queue_.dequeue_bulk(std::back_inserter(items), max_count);
+    if (items.empty()) {
+        return;
+    }
+
+    std::unordered_map<TcpConnection*, std::vector<std::string>> batches;
+    batches.reserve(items.size());
+    for (auto& item : items) {
+        TcpConnection* conn = FindConnection(item.user_id);
+        if (!conn) {
+            continue;
+        }
+        batches[conn].push_back(std::move(item.data));
+    }
+
+    for (auto& [conn, messages] : batches) {
+        conn->enqueue_messages(std::move(messages));
     }
 }
