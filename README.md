@@ -141,6 +141,16 @@ If you just want to run the server without setting up a development environment:
 docker-compose up --build
 ```
 
+For a direct EC2/server build, use the server-only preset. It skips the FTXUI client and Go/Python protobuf outputs, but still requires a Rust toolchain because the ScyllaDB C++ driver builds a Rust wrapper:
+
+```bash
+cmake --preset server-release
+cmake --build --preset server-release
+./build/server-release/server/src/server
+```
+
+Install Rust with `rustup` if CMake cannot find `rustc`, `cargo`, or `rustdoc`.
+
 ---
 
 ## 🖥️ Local Client Development (macOS/Linux)

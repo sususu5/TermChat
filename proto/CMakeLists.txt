@@ -32,28 +32,42 @@ foreach(PROTO_FILE ${PROTO_FILES})
     set(PROTO_PY "${PROTO_PY_DIR}/${PROTO_NAME}_pb2.py")
     set(PROTO_PYI "${PROTO_PY_DIR}/${PROTO_NAME}_pb2.pyi")
     set(PROTO_GO "${PROTO_GO_DIR}/${PROTO_NAME}.pb.go")
-    
+
+    set(PROTO_OUTPUTS ${PROTO_SRC} ${PROTO_HDR})
+    set(PROTO_ARGS --cpp_out=${PROTO_CPP_DIR})
+
     list(APPEND PROTO_SRCS ${PROTO_SRC})
     list(APPEND PROTO_HDRS ${PROTO_HDR})
-    list(APPEND PROTO_PYS ${PROTO_PY})
-    list(APPEND PROTO_PYIS ${PROTO_PYI})
-    list(APPEND PROTO_GOS ${PROTO_GO})
+
+    if(BUILD_PROTO_PYTHON)
+        list(APPEND PROTO_OUTPUTS ${PROTO_PY} ${PROTO_PYI})
+        list(APPEND PROTO_ARGS --python_out=${PROTO_PY_DIR} --pyi_out=${PROTO_PY_DIR})
+        list(APPEND PROTO_PYS ${PROTO_PY})
+        list(APPEND PROTO_PYIS ${PROTO_PYI})
+    endif()
+
+    if(BUILD_PROTO_GO)
+        list(APPEND PROTO_OUTPUTS ${PROTO_GO})
+        list(APPEND PROTO_ARGS --go_out=${PROTO_GO_DIR} --go_opt=paths=source_relative)
+        list(APPEND PROTO_GOS ${PROTO_GO})
+    endif()
 
     add_custom_command(
-        OUTPUT ${PROTO_SRC} ${PROTO_HDR} ${PROTO_PY} ${PROTO_PYI} ${PROTO_GO}
+        OUTPUT ${PROTO_OUTPUTS}
         COMMAND protobuf::protoc
-        ARGS --cpp_out=${PROTO_CPP_DIR}
-            --python_out=${PROTO_PY_DIR}
-            --pyi_out=${PROTO_PY_DIR}
-            --go_out=${PROTO_GO_DIR} --go_opt=paths=source_relative
-            -I${CMAKE_CURRENT_SOURCE_DIR} ${PROTO_FILE}
+        ARGS ${PROTO_ARGS} -I${CMAKE_CURRENT_SOURCE_DIR} ${PROTO_FILE}
         DEPENDS ${PROTO_FILE}
-        COMMENT "Generating C++, Python, Python stubs and Go code from ${PROTO_NAME}.proto"
+        COMMENT "Generating protobuf outputs from ${PROTO_NAME}.proto"
     )
 endforeach()
 
-add_custom_target(proto_python_generated ALL DEPENDS ${PROTO_PYS} ${PROTO_PYIS})
-add_custom_target(proto_go_generated ALL DEPENDS ${PROTO_GOS})
+if(BUILD_PROTO_PYTHON)
+    add_custom_target(proto_python_generated ALL DEPENDS ${PROTO_PYS} ${PROTO_PYIS})
+endif()
+
+if(BUILD_PROTO_GO)
+    add_custom_target(proto_go_generated ALL DEPENDS ${PROTO_GOS})
+endif()
 
 add_library(proto_generated STATIC ${PROTO_SRCS} ${PROTO_HDRS})
 

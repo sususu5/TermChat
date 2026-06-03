@@ -41,6 +41,36 @@
       }
     },
     {
+      "name": "server-release",
+      "displayName": "Server Release",
+      "description": "Release build for EC2/server deployment without client or non-C++ proto tooling",
+      "inherits": "vcpkg",
+      "binaryDir": "${sourceDir}/build/server-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_SERVER": "ON",
+        "BUILD_CLIENT": "OFF",
+        "BUILD_PROTO_PYTHON": "OFF",
+        "BUILD_PROTO_GO": "OFF",
+        "VCPKG_MANIFEST_FEATURES": "server"
+      }
+    },
+    {
+      "name": "server-debug",
+      "displayName": "Server Debug",
+      "description": "Debug build for EC2/server troubleshooting without client or non-C++ proto tooling",
+      "inherits": "vcpkg",
+      "binaryDir": "${sourceDir}/build/server-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_SERVER": "ON",
+        "BUILD_CLIENT": "OFF",
+        "BUILD_PROTO_PYTHON": "OFF",
+        "BUILD_PROTO_GO": "OFF",
+        "VCPKG_MANIFEST_FEATURES": "server"
+      }
+    },
+    {
       "name": "perf",
       "displayName": "RelWithDebInfo",
       "description": "Release build with Debug Info for profiling",
@@ -80,6 +110,14 @@
     {
       "name": "release",
       "configurePreset": "release"
+    },
+    {
+      "name": "server-release",
+      "configurePreset": "server-release"
+    },
+    {
+      "name": "server-debug",
+      "configurePreset": "server-debug"
     },
     {
       "name": "perf",

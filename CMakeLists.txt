@@ -13,6 +13,13 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)   # For libraries that might be linked s
 # Export compile_commands.json for IDEs (VSCode, clangd, etc.)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Build switches. Server-only presets disable client and non-C++ proto outputs to
+# keep EC2 deployments from requiring UI and test-tooling dependencies.
+option(BUILD_SERVER "Build the server application" ON)
+option(BUILD_CLIENT "Build the terminal client application" ON)
+option(BUILD_PROTO_PYTHON "Generate Python protobuf files for tests/tools" ON)
+option(BUILD_PROTO_GO "Generate Go protobuf files for benchmarks/smoke tests" ON)
+
 # Optionally select build type from command line, default to Release if none given
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING
@@ -25,22 +32,37 @@ endif()
 find_package(protobuf CONFIG REQUIRED)
 message(STATUS "Found Protobuf: ${protobuf_VERSION}")
 
-# Optionally build only the client
-option(BUILD_SERVER "Build the server application" ON)
-
 # ---------------------------------------------------------------------------
 # Rust toolchain (for cpp-rs-driver) - Only needed for server
 # ---------------------------------------------------------------------------
 if(BUILD_SERVER)
-    if(CMAKE_Rust_COMPILER STREQUAL "/root/.cargo/bin/rustc")
+    if(DEFINED CMAKE_Rust_COMPILER AND CMAKE_Rust_COMPILER AND NOT EXISTS "${CMAKE_Rust_COMPILER}")
         unset(CMAKE_Rust_COMPILER CACHE)
     endif()
-    if(CARGO_EXECUTABLE STREQUAL "/root/.cargo/bin/cargo")
+    if(DEFINED CARGO_EXECUTABLE AND CARGO_EXECUTABLE AND NOT EXISTS "${CARGO_EXECUTABLE}")
         unset(CARGO_EXECUTABLE CACHE)
     endif()
 
-    find_program(CMAKE_Rust_COMPILER rustc REQUIRED)
-    find_program(CARGO_EXECUTABLE cargo REQUIRED)
+    find_program(CMAKE_Rust_COMPILER
+        NAMES rustc
+        HINTS "$ENV{CARGO_HOME}" "$ENV{HOME}/.cargo" "/usr/local/cargo"
+        PATH_SUFFIXES bin
+        REQUIRED
+    )
+    find_program(CARGO_EXECUTABLE
+        NAMES cargo
+        HINTS "$ENV{CARGO_HOME}" "$ENV{HOME}/.cargo" "/usr/local/cargo"
+        PATH_SUFFIXES bin
+        REQUIRED
+    )
+
+    get_filename_component(_termchat_cargo_bin "${CARGO_EXECUTABLE}" DIRECTORY)
+    get_filename_component(_termchat_cargo_home "${_termchat_cargo_bin}" DIRECTORY)
+    set(CARGO_HOME "${_termchat_cargo_home}" CACHE PATH "Rust Cargo home used by cpp-rs-driver")
+    set(ENV{CARGO_HOME} "${CARGO_HOME}")
+    set(ENV{RUSTC} "${CMAKE_Rust_COMPILER}")
+    set(ENV{CARGO} "${CARGO_EXECUTABLE}")
+    set(ENV{PATH} "${_termchat_cargo_bin}:$ENV{PATH}")
 
     message(STATUS "Using rustc: ${CMAKE_Rust_COMPILER}")
     message(STATUS "Using cargo: ${CARGO_EXECUTABLE}")
@@ -72,7 +94,9 @@ if(BUILD_SERVER)
     add_subdirectory(server/src)
 endif()
 
-add_subdirectory(client)
+if(BUILD_CLIENT)
+    add_subdirectory(client)
+endif()
 
 # ---------------------------------------------------------------------------
 # Packaging / installation rules (optional)

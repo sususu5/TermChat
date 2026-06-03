@@ -19,10 +19,10 @@ services:
       - ssl-certs:/etc/mysql/certs:ro
     command: >
       bash -c "
-      rm -rf build/release;
-      cmake --preset release &&
-      cmake --build build/release &&
-      ./build/release/server/src/server
+      rm -rf build/server-release;
+      cmake --preset server-release &&
+      cmake --build --preset server-release &&
+      ./build/server-release/server/src/server
       "
 
   mysql:

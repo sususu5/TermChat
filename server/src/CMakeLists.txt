@@ -88,4 +88,36 @@ endif()
 # ---------------------------------------------------------------------------
 add_executable(server "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp")
 
+if(TARGET scylla-cpp-driver)
+    get_target_property(_termchat_scylla_driver_location scylla-cpp-driver IMPORTED_LOCATION)
+    if(_termchat_scylla_driver_location)
+        get_filename_component(_termchat_scylla_driver_file "${_termchat_scylla_driver_location}" NAME)
+        set(_termchat_scylla_driver_targets "${_termchat_scylla_driver_file}_copy")
+
+        if(APPLE)
+            string(REGEX MATCH "^(.+\\.)([0-9]+)(\\..*)?\\.dylib$"
+                   _termchat_scylla_driver_match "${_termchat_scylla_driver_file}")
+            if(_termchat_scylla_driver_match)
+                list(APPEND _termchat_scylla_driver_targets
+                     "${CMAKE_MATCH_1}${CMAKE_MATCH_2}.dylib_symlink"
+                     "libscylla-cpp-driver.dylib_symlink")
+            endif()
+        elseif(UNIX)
+            string(REGEX MATCH "^(.+\\.so)\\.([0-9]+)(\\..*)?$"
+                   _termchat_scylla_driver_match "${_termchat_scylla_driver_file}")
+            if(_termchat_scylla_driver_match)
+                list(APPEND _termchat_scylla_driver_targets
+                     "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}_symlink"
+                     "${CMAKE_MATCH_1}_symlink")
+            endif()
+        endif()
+
+        foreach(_termchat_scylla_driver_target IN LISTS _termchat_scylla_driver_targets)
+            if(TARGET ${_termchat_scylla_driver_target})
+                add_dependencies(server ${_termchat_scylla_driver_target})
+            endif()
+        endforeach()
+    endif()
+endif()
+
 target_link_libraries(server PRIVATE termchat_core)

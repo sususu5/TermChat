@@ -25,9 +25,12 @@ RUN apt-get update && apt-get install -y \
     python3-pyparsing \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain nightly
-ENV PATH="/root/.cargo/bin:${PATH}"
-ENV RUSTC="/root/.cargo/bin/rustc"
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:${PATH} \
+    RUSTC=/usr/local/cargo/bin/rustc \
+    CARGO=/usr/local/cargo/bin/cargo
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain nightly --no-modify-path
 
 RUN pip3 install --break-system-packages protobuf==5.29.5
 

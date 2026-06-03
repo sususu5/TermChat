@@ -29,6 +29,14 @@ int EnvInt(const char* name, int default_value) {
     return static_cast<int>(parsed);
 }
 
+const char* EnvString(const char* name, const char* default_value) {
+    const char* value = std::getenv(name);
+    if (!value || *value == '\0') {
+        return default_value;
+    }
+    return value;
+}
+
 int main(int argc, char* argv[]) {
     bool open_log = true;
     int opt;
@@ -58,8 +66,12 @@ int main(int argc, char* argv[]) {
         const int thread_num = EnvInt("TERMCHAT_THREAD_NUM", 40);
         const int epoll_event_num = EnvInt("TERMCHAT_EPOLL_EVENTS", 4096);
         const int idle_timeout_ms = EnvInt("TERMCHAT_IDLE_TIMEOUT_MS", 180000);
-        Webserver server(1316, 3, idle_timeout_ms, 3306, "root", "123456", "testdb", mysql_pool_num, thread_num,
-                         epoll_event_num, open_log, 1, 1024);
+        const int mysql_port = EnvInt("MYSQL_PORT", 3306);
+        const char* mysql_user = EnvString("MYSQL_USER", "root");
+        const char* mysql_password = EnvString("MYSQL_PASSWORD", "123456");
+        const char* mysql_database = EnvString("MYSQL_DATABASE", "testdb");
+        Webserver server(1316, 3, idle_timeout_ms, mysql_port, mysql_user, mysql_password, mysql_database,
+                         mysql_pool_num, thread_num, epoll_event_num, open_log, 1, 1024);
         g_server = &server;
         server.Start();
         g_server = nullptr;
