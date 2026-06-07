@@ -141,7 +141,14 @@ If you just want to run the server without setting up a development environment:
 docker-compose up --build
 ```
 
-For a direct EC2/server build, use the server-only preset. It skips the FTXUI client and Go/Python protobuf outputs, but still requires a Rust toolchain because the ScyllaDB C++ driver builds a Rust wrapper:
+For a direct EC2/server build, bootstrap the host once, then use the server-only preset. The bootstrap script installs the common apt build tools, Rust nightly for the ScyllaDB C++ driver, Go/protoc-gen-go for benchmarks, and vcpkg:
+
+```bash
+./scripts/bootstrap_ec2_build_deps.sh
+source ~/.termchat-build-env
+```
+
+Build only the server when the EC2 instance is the server under test. This skips the FTXUI client and Go/Python protobuf outputs:
 
 ```bash
 cmake --preset server-release
@@ -149,7 +156,13 @@ cmake --build --preset server-release
 ./build/server-release/server/src/server
 ```
 
-Install Rust with `rustup` if CMake cannot find `rustc`, `cargo`, or `rustdoc`.
+Build the `server-perf` preset when this host also needs the Go benchmark protobuf outputs:
+
+```bash
+cmake --preset server-perf
+cmake --build --preset server-perf
+PERF_CONFIG=scripts/perf-50k.env scripts/run_perf_with_monitor.sh
+```
 
 ---
 

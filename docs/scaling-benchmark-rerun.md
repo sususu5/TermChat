@@ -1,195 +1,228 @@
-# Scaling Benchmark Rerun Commands
+# AWS Scaling Benchmark Runbook
 
-Use the perf build and run one server instance with logging disabled. `TERMCHAT_IDLE_TIMEOUT_MS` defaults to `180000`
-in the current server; keep it above the benchmark duration when validating whether previous EOF failures were caused
-by the idle timer:
+This runbook describes a reproducible two-host AWS benchmark setup for the IM scaling test.
 
-```bash
-cmake --preset perf
-cmake --build build/relwithdebinfo
-TERMCHAT_IDLE_TIMEOUT_MS=300000 TERMCHAT_FAST_CLIENT_DEDUP=1 ./build/relwithdebinfo/server/src/server -l 0
-```
+## Target Environment
 
-The server prints the effective `TERMCHAT_IDLE_TIMEOUT_MS` on startup. Confirm that value before starting a rerun.
+Use two EC2 instances in the same Region, VPC, subnet/AZ if possible:
 
-`TERMCHAT_FAST_CLIENT_DEDUP=1` is the recommended switch for the current local benchmark pass. It keeps
-`client_msg_id` retry idempotency in a sharded in-memory cache, returns duplicate retries from that cache, and persists
-the dedup state to Scylla asynchronously after message persistence. This removes synchronous client-message dedup
-Scylla reads/writes from the immediate ACK hot path while preserving runtime duplicate suppression.
+| Role | AMI | Architecture | Instance type | Root volume |
+| --- | --- | --- | --- | --- |
+| Server | Ubuntu Server 24.04 LTS | arm64 | c7g.2xlarge | 80 GiB gp3 |
+| Benchmark client | Ubuntu Server 24.04 LTS | arm64 | c7g.2xlarge | 80 GiB gp3 |
 
-Reliability impact: message body persistence still goes through `AsyncMsgWriter`, so this switch does not disable message
-storage. Compared with the original synchronous Scylla dedup path, it changes crash-recovery semantics: if the server
-crashes after ACK but before asynchronous dedup persistence completes, a retry after restart may not be recognized as a
-duplicate. For strict crash-proof idempotency, add a durable local WAL or keep the synchronous path.
+Security group rules:
 
-`TERMCHAT_DISABLE_SYNC_CLIENT_DEDUP=1` remains a benchmark isolation switch that disables the synchronous Scylla dedup
-checks without providing the fast in-memory dedup replacement. Prefer `TERMCHAT_FAST_CLIENT_DEDUP=1` for production-like
-performance runs.
+- Allow SSH `22/tcp` from your workstation.
+- Allow TermChat `1316/tcp` from the benchmark client private IP to the server.
+- Keep MySQL `3306/tcp` and Scylla `9042/tcp` private to the server host unless you intentionally split database hosts.
 
-Keep `-connect-ramp` below the idle timeout so early clients do not finish warmup and then sit idle long enough to be
-closed before the measured phase starts.
+Use the server private IP in benchmark commands. Avoid sending benchmark traffic through public IP/NAT.
 
-This rerun changes `02-scaling` from a short burst test to an IM-like online-user test:
+## 1. Prepare Both Hosts
 
-- More concurrent long-lived TCP clients than the earlier 2,000-2,300 client burst runs.
-- Lower per-user message frequency with `-duration` and `-rate-per-client`.
-- Random online receiver selection with `-receiver-mode random-online`, avoiding the single hot receiver used by the earlier scaling runs.
-- `-inflight 1` because rate mode sends at a controlled per-client pace.
-- `-warmup 5` keeps a small pre-measurement warmup, and warmup messages use the same random online receiver mode as the measured phase.
-- `-rate-schedule poisson` avoids synchronized send waves across all clients while preserving the configured average per-client message rate. Rate-mode clients share one global benchmark deadline, so high client counts do not stretch the measured window because of benchmark-driver scheduling lag.
-- `-request-timeout 30s` bounds request-level ACK waits, so benchmark failures are reported as client-observed request timeouts instead of waiting for the server idle timer.
-- `-drain 30s` keeps clients connected after the measured send window and reads remaining push/ACK frames before closing, reducing teardown-amplified tail latency.
-- The benchmark sends unmeasured keepalive traffic while clients wait at the final start barrier, so early clients are not closed by the server idle timeout during large connection ramps.
-
-These runs should be interpreted as online-capacity and latency-stability data. Do not compare their `success_qps` directly with the earlier `inflight=2` burst runs.
-
-## Single Pass
-
-3,000 online clients, one message every 5 seconds per client on average:
+Clone the repository on both instances, then bootstrap the build dependencies:
 
 ```bash
-go run ./tests/perf \
-  -addr 127.0.0.1:1316 \
-  -clients 3000 \
-  -duration 180s \
-  -rate-per-client 0.2 \
-  -rate-schedule poisson \
-  -request-timeout 30s \
-  -drain 30s \
-  -payload 256 \
-  -inflight 1 \
-  -warmup 5 \
-  -receiver-mode random-online \
-  -connect-ramp 45s \
-  -scenario im_scaling_3000c_0_2rps_random_ramp45s \
-  -out benchmark-results/02-scaling-im-3000c
+git clone <repo-url> TermChat
+cd TermChat
+./scripts/bootstrap_ec2_build_deps.sh
+source ~/.termchat-build-env
 ```
 
-4,000 online clients, one message every 5 seconds per client on average:
+Apply runtime limits on both hosts:
 
 ```bash
-go run ./tests/perf \
-  -addr 127.0.0.1:1316 \
-  -clients 4000 \
-  -duration 180s \
-  -rate-per-client 0.2 \
-  -rate-schedule poisson \
-  -request-timeout 30s \
-  -drain 30s \
-  -payload 256 \
-  -inflight 1 \
-  -warmup 5 \
-  -receiver-mode random-online \
-  -connect-ramp 45s \
-  -scenario im_scaling_4000c_0_2rps_random_ramp45s \
-  -out benchmark-results/02-scaling-im-4000c
+sudo tee /etc/sysctl.d/99-termchat-benchmark.conf >/dev/null <<'EOF'
+fs.file-max = 1048576
+net.core.somaxconn = 65535
+net.ipv4.tcp_max_syn_backlog = 65535
+net.ipv4.ip_local_port_range = 10000 65535
+net.ipv4.tcp_tw_reuse = 1
+EOF
+sudo sysctl --system
+
+sudo tee /etc/security/limits.d/99-termchat.conf >/dev/null <<'EOF'
+* soft nofile 1048576
+* hard nofile 1048576
+ubuntu soft nofile 1048576
+ubuntu hard nofile 1048576
+EOF
 ```
 
-5,000 online clients, one message every 5 seconds per client on average:
+Log out and back in, then verify:
 
 ```bash
-go run ./tests/perf \
-  -addr 127.0.0.1:1316 \
-  -clients 5000 \
-  -duration 180s \
-  -rate-per-client 0.2 \
-  -rate-schedule poisson \
-  -request-timeout 30s \
-  -drain 30s \
-  -payload 256 \
-  -inflight 1 \
-  -warmup 5 \
-  -receiver-mode random-online \
-  -connect-ramp 45s \
-  -scenario im_scaling_5000c_0_2rps_random_ramp45s \
-  -out benchmark-results/02-scaling-im-5000c
+ulimit -n
+sysctl net.ipv4.ip_local_port_range
 ```
 
-If the 5,000-client run is stable and you want to probe headroom, increase connected users while keeping per-user rate fixed:
+The client host needs the widened ephemeral port range for 50k outbound TCP connections to one server address.
+
+## 2. Prepare Server Host
+
+Install Docker for the local MySQL and Scylla services:
 
 ```bash
-go run ./tests/perf \
-  -addr 127.0.0.1:1316 \
-  -clients 8000 \
-  -duration 180s \
-  -rate-per-client 0.2 \
-  -rate-schedule poisson \
-  -request-timeout 30s \
-  -drain 30s \
-  -payload 256 \
-  -inflight 1 \
-  -warmup 5 \
-  -receiver-mode random-online \
-  -connect-ramp 45s \
-  -scenario im_scaling_8000c_0_2rps_random_ramp45s \
-  -out benchmark-results/02-scaling-im-8000c
+sudo apt-get update
+sudo apt-get install -y docker.io docker-compose-v2
+sudo usermod -aG docker "$USER"
+newgrp docker
 ```
 
-## Lower-Frequency Capacity Probe
-
-If the benchmark driver or local file descriptor limit becomes the bottleneck before the server does, reduce per-client traffic to one message every 20 seconds and increase connection count:
+Start only the database services:
 
 ```bash
-go run ./tests/perf \
-  -addr 127.0.0.1:1316 \
-  -clients 10000 \
-  -duration 240s \
-  -rate-per-client 0.05 \
-  -rate-schedule poisson \
-  -request-timeout 30s \
-  -drain 30s \
-  -payload 256 \
-  -inflight 1 \
-  -warmup 5 \
-  -receiver-mode random-online \
-  -connect-ramp 45s \
-  -scenario im_scaling_10000c_0_05rps_random_ramp45s \
-  -out benchmark-results/02-scaling-im-10000c
+docker compose up -d mysql scylla
+docker compose ps
 ```
+
+Copy the generated MySQL CA certificate to the path expected by the C++ server:
 
 ```bash
-go run ./tests/perf \
-  -addr 127.0.0.1:1316 \
-  -clients 20000 \
-  -duration 240s \
-  -rate-per-client 0.1 \
-  -rate-schedule poisson \
-  -request-timeout 30s \
-  -drain 30s \
-  -payload 256 \
-  -inflight 1 \
-  -warmup 5 \
-  -receiver-mode random-online \
-  -connect-ramp 45s \
-  -scenario im_scaling_20000c_0_1rps_random_ramp45s \
-  -out benchmark-results/02-scaling-im-20000c
+sudo mkdir -p /etc/mysql/certs
+docker compose cp mysql:/certs/ca.pem /tmp/termchat-mysql-ca.pem
+sudo cp /tmp/termchat-mysql-ca.pem /etc/mysql/certs/ca.pem
+sudo chmod 644 /etc/mysql/certs/ca.pem
 ```
 
-## Three-Pass Template
-
-Use distinct output directories when collecting repeat runs:
+Initialize the Scylla schema:
 
 ```bash
-for run in 1 2 3; do
-  go run ./tests/perf \
-    -addr 127.0.0.1:1316 \
-    -clients 5000 \
-    -duration 180s \
-    -rate-per-client 0.2 \
-    -rate-schedule poisson \
-    -request-timeout 30s \
-    -drain 30s \
-    -payload 256 \
-    -inflight 1 \
-    -warmup 5 \
-    -receiver-mode random-online \
-    -connect-ramp 45s \
-    -scenario im_scaling_5000c_0_2rps_random_ramp45s_run${run} \
-    -out benchmark-results/02-scaling-im-5000c-run${run}
-done
+docker compose exec scylla cqlsh -e "
+CREATE KEYSPACE IF NOT EXISTS im
+WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+
+CREATE TABLE IF NOT EXISTS im.messages (
+  conversation_id text,
+  message_id bigint,
+  timestamp bigint,
+  sender_id bigint,
+  receiver_id bigint,
+  content_type int,
+  content blob,
+  PRIMARY KEY ((conversation_id), message_id)
+) WITH CLUSTERING ORDER BY (message_id ASC);
+
+CREATE TABLE IF NOT EXISTS im.user_messages_by_id (
+  user_id bigint,
+  message_id bigint,
+  sender_id bigint,
+  receiver_id bigint,
+  content_type int,
+  content blob,
+  timestamp bigint,
+  PRIMARY KEY ((user_id), message_id)
+) WITH CLUSTERING ORDER BY (message_id ASC);
+
+CREATE TABLE IF NOT EXISTS im.client_msg_dedup (
+  sender_id bigint,
+  client_msg_id bigint,
+  server_msg_id bigint,
+  receiver_id bigint,
+  status int,
+  created_at bigint,
+  updated_at bigint,
+  PRIMARY KEY ((sender_id), client_msg_id)
+);"
 ```
 
-Only use runs with `valid: true` and `errors: {}` for capacity conclusions. Compare:
+Build the server profiling binary:
+
+```bash
+cmake --preset server-perf
+cmake --build --preset server-perf
+```
+
+Run the server:
+
+```bash
+MYSQL_HOST=127.0.0.1 \
+MYSQL_PORT=3306 \
+MYSQL_USER=root \
+MYSQL_PASSWORD=123456 \
+MYSQL_DATABASE=testdb \
+SCYLLA_HOST=127.0.0.1 \
+SCYLLA_PORT=9042 \
+TERMCHAT_IDLE_TIMEOUT_MS=300000 \
+TERMCHAT_FAST_CLIENT_DEDUP=1 \
+./build/relwithdebinfo/server/src/server -l 0
+```
+
+Run this in `tmux` or `screen` so the server stays up if the SSH session disconnects.
+
+Confirm the server is listening:
+
+```bash
+ss -ltnp | grep ':1316'
+```
+
+## 3. Prepare Benchmark Client Host
+
+Build the benchmark protobuf outputs. The Go benchmark imports generated files from `build/relwithdebinfo/proto/go`, so use the dedicated benchmark-client preset:
+
+```bash
+cmake --preset benchmark-client
+cmake --build --preset benchmark-client
+go mod download
+```
+
+Create a client-side env file. Replace `SERVER_PRIVATE_IP` with the server instance private IP:
+
+```bash
+SERVER_PRIVATE_IP=10.0.0.10
+cp scripts/perf-50k.env scripts/perf-50k-aws.env
+sed -i "s/^BENCH_ADDR=.*/BENCH_ADDR=${SERVER_PRIVATE_IP}:1316/" scripts/perf-50k-aws.env
+```
+
+Run the 50k-client benchmark without autostarting a local server:
+
+```bash
+SERVER_AUTOSTART=0 PERF_CONFIG=scripts/perf-50k-aws.env scripts/run_perf_with_monitor.sh
+```
+
+The default 50k profile is:
+
+- `BENCH_CLIENTS=50000`
+- `BENCH_DURATION=240s`
+- `BENCH_RATE_PER_CLIENT=0.1`
+- `BENCH_RATE_SCHEDULE=poisson`
+- `BENCH_CONNECT_RAMP=45s`
+- `BENCH_REQUEST_TIMEOUT=30s`
+- `BENCH_DRAIN=30s`
+- `BENCH_PAYLOAD=256`
+- `BENCH_INFLIGHT=1`
+- `BENCH_WARMUP=5`
+- `BENCH_RECEIVER_MODE=random-online`
+
+## 4. Collect Results
+
+On the client host, benchmark output is under:
+
+```bash
+benchmark-results/im_scaling_50000c_0_1rps_random_ramp45s/
+```
+
+Important files:
+
+- `summary.json`: validity, QPS, latency percentiles, error counts.
+- `latency.csv`: per-message latency records.
+- `monitor/meta.log`: effective benchmark parameters.
+- `monitor/bench.log`: full benchmark stdout/stderr.
+- `monitor/top.log`, `monitor/vmstat.log`, `monitor/ss-summary.log`, `monitor/ss-established.log`: client-side resource and socket telemetry.
+
+On the server host, also capture:
+
+```bash
+docker compose ps
+docker compose logs mysql --tail=100
+docker compose logs scylla --tail=100
+ss -s
+top -b -n 1
+vmstat 1 5
+```
+
+Only use runs with `valid: true` and empty `errors` in `summary.json` for capacity conclusions. Compare:
 
 ```text
 valid
@@ -204,4 +237,34 @@ rate_per_client
 rate_schedule
 request_timeout_ms
 receiver_mode
+```
+
+## 5. Rerun Checklist
+
+Before each rerun:
+
+```bash
+# Server host
+docker compose ps
+ss -ltnp | grep ':1316'
+
+# Client host
+ulimit -n
+sysctl net.ipv4.ip_local_port_range
+```
+
+If you need a clean database between runs:
+
+```bash
+# Server host
+docker compose exec mysql mysql -uroot -p123456 testdb -e "TRUNCATE im_friend; TRUNCATE im_user;"
+docker compose exec scylla cqlsh -e "TRUNCATE im.messages; TRUNCATE im.user_messages_by_id; TRUNCATE im.client_msg_dedup;"
+```
+
+Use distinct `OUT_DIR` values for repeated runs:
+
+```bash
+OUT_DIR=benchmark-results/aws-50k-run1 SERVER_AUTOSTART=0 PERF_CONFIG=scripts/perf-50k-aws.env scripts/run_perf_with_monitor.sh
+OUT_DIR=benchmark-results/aws-50k-run2 SERVER_AUTOSTART=0 PERF_CONFIG=scripts/perf-50k-aws.env scripts/run_perf_with_monitor.sh
+OUT_DIR=benchmark-results/aws-50k-run3 SERVER_AUTOSTART=0 PERF_CONFIG=scripts/perf-50k-aws.env scripts/run_perf_with_monitor.sh
 ```

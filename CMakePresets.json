@@ -81,6 +81,36 @@
       }
     },
     {
+      "name": "server-perf",
+      "displayName": "Server RelWithDebInfo",
+      "description": "EC2/server profiling build with Go benchmark proto outputs, no client",
+      "inherits": "vcpkg",
+      "binaryDir": "${sourceDir}/build/relwithdebinfo",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "BUILD_SERVER": "ON",
+        "BUILD_CLIENT": "OFF",
+        "BUILD_PROTO_PYTHON": "OFF",
+        "BUILD_PROTO_GO": "ON",
+        "VCPKG_MANIFEST_FEATURES": "server"
+      }
+    },
+    {
+      "name": "benchmark-client",
+      "displayName": "Benchmark Client Proto",
+      "description": "Generate Go benchmark protobuf outputs without building server or FTXUI client",
+      "inherits": "vcpkg",
+      "binaryDir": "${sourceDir}/build/relwithdebinfo",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "BUILD_SERVER": "OFF",
+        "BUILD_CLIENT": "OFF",
+        "BUILD_PROTO_PYTHON": "OFF",
+        "BUILD_PROTO_GO": "ON",
+        "VCPKG_MANIFEST_FEATURES": ""
+      }
+    },
+    {
       "name": "default",
       "displayName": "Default (Release)",
       "description": "Default release build",
@@ -122,6 +152,14 @@
     {
       "name": "perf",
       "configurePreset": "perf"
+    },
+    {
+      "name": "server-perf",
+      "configurePreset": "server-perf"
+    },
+    {
+      "name": "benchmark-client",
+      "configurePreset": "benchmark-client"
     },
     {
       "name": "default",
