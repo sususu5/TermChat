@@ -86,47 +86,6 @@ sudo cp /tmp/termchat-mysql-ca.pem /etc/mysql/certs/ca.pem
 sudo chmod 644 /etc/mysql/certs/ca.pem
 ```
 
-Initialize the Scylla schema:
-
-```bash
-docker compose exec scylla cqlsh -e "
-CREATE KEYSPACE IF NOT EXISTS im
-WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
-
-CREATE TABLE IF NOT EXISTS im.messages (
-  conversation_id text,
-  message_id bigint,
-  timestamp bigint,
-  sender_id bigint,
-  receiver_id bigint,
-  content_type int,
-  content blob,
-  PRIMARY KEY ((conversation_id), message_id)
-) WITH CLUSTERING ORDER BY (message_id ASC);
-
-CREATE TABLE IF NOT EXISTS im.user_messages_by_id (
-  user_id bigint,
-  message_id bigint,
-  sender_id bigint,
-  receiver_id bigint,
-  content_type int,
-  content blob,
-  timestamp bigint,
-  PRIMARY KEY ((user_id), message_id)
-) WITH CLUSTERING ORDER BY (message_id ASC);
-
-CREATE TABLE IF NOT EXISTS im.client_msg_dedup (
-  sender_id bigint,
-  client_msg_id bigint,
-  server_msg_id bigint,
-  receiver_id bigint,
-  status int,
-  created_at bigint,
-  updated_at bigint,
-  PRIMARY KEY ((sender_id), client_msg_id)
-);"
-```
-
 Build the server profiling binary:
 
 ```bash
@@ -253,18 +212,24 @@ ulimit -n
 sysctl net.ipv4.ip_local_port_range
 ```
 
-If you need a clean database between runs:
+If you need a clean database between runs, destroy and recreate the database
+containers and volumes on the server host, then start the database services again:
 
 ```bash
-# Server host
-docker compose exec mysql mysql -uroot -p123456 testdb -e "TRUNCATE im_friend; TRUNCATE im_user;"
-docker compose exec scylla cqlsh -e "TRUNCATE im.messages; TRUNCATE im.user_messages_by_id; TRUNCATE im.client_msg_dedup;"
+docker compose stop mysql scylla
+docker compose rm -f mysql scylla
+docker volume rm termchat_mysql-data termchat_ssl-certs 2>/dev/null || true
+
+docker compose up -d mysql scylla
+docker compose ps
 ```
 
-Use distinct `OUT_DIR` values for repeated runs:
+After recreating the containers, copy the MySQL CA certificate again and
+reinitialize the Scylla schema:
 
 ```bash
-OUT_DIR=benchmark-results/aws-50k-run1 SERVER_AUTOSTART=0 PERF_CONFIG=scripts/perf-50k-aws.env scripts/run_perf_with_monitor.sh
-OUT_DIR=benchmark-results/aws-50k-run2 SERVER_AUTOSTART=0 PERF_CONFIG=scripts/perf-50k-aws.env scripts/run_perf_with_monitor.sh
-OUT_DIR=benchmark-results/aws-50k-run3 SERVER_AUTOSTART=0 PERF_CONFIG=scripts/perf-50k-aws.env scripts/run_perf_with_monitor.sh
+sudo mkdir -p /etc/mysql/certs
+docker compose cp mysql:/certs/ca.pem /tmp/termchat-mysql-ca.pem
+sudo cp /tmp/termchat-mysql-ca.pem /etc/mysql/certs/ca.pem
+sudo chmod 644 /etc/mysql/certs/ca.pem
 ```
