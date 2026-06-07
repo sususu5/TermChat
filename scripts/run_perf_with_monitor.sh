@@ -1,7 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OUT_DIR="${OUT_DIR:-benchmark-results/02-scaling-im-25000c}"
+PERF_CONFIG="${PERF_CONFIG:-}"
+if [[ -n "${PERF_CONFIG}" ]]; then
+    # shellcheck source=/dev/null
+    source "${PERF_CONFIG}"
+elif [[ -f scripts/perf.env ]]; then
+    # shellcheck source=/dev/null
+    source scripts/perf.env
+fi
+
+BENCH_CLIENTS="${BENCH_CLIENTS:-25000}"
+BENCH_DURATION="${BENCH_DURATION:-240s}"
+BENCH_RATE_PER_CLIENT="${BENCH_RATE_PER_CLIENT:-0.1}"
+BENCH_RATE_SCHEDULE="${BENCH_RATE_SCHEDULE:-poisson}"
+BENCH_REQUEST_TIMEOUT="${BENCH_REQUEST_TIMEOUT:-30s}"
+BENCH_DRAIN="${BENCH_DRAIN:-30s}"
+BENCH_PAYLOAD="${BENCH_PAYLOAD:-256}"
+BENCH_INFLIGHT="${BENCH_INFLIGHT:-1}"
+BENCH_WARMUP="${BENCH_WARMUP:-5}"
+BENCH_RECEIVER_MODE="${BENCH_RECEIVER_MODE:-random-online}"
+BENCH_CONNECT_RAMP="${BENCH_CONNECT_RAMP:-45s}"
+BENCH_RATE_LABEL="${BENCH_RATE_PER_CLIENT//./_}"
+BENCH_SCENARIO="${BENCH_SCENARIO:-im_scaling_${BENCH_CLIENTS}c_${BENCH_RATE_LABEL}rps_random_ramp${BENCH_CONNECT_RAMP%s}}"
+
+OUT_DIR="${OUT_DIR:-benchmark-results/${BENCH_SCENARIO}}"
 MONITOR_DIR="${MONITOR_DIR:-${OUT_DIR}/monitor}"
 INTERVAL="${MONITOR_INTERVAL:-1}"
 BENCH_ADDR="${BENCH_ADDR:-127.0.0.1:1316}"
@@ -107,6 +130,20 @@ trap cleanup EXIT INT TERM
     echo "out_dir=${OUT_DIR}"
     echo "monitor_dir=${MONITOR_DIR}"
     echo "interval_seconds=${INTERVAL}"
+    echo "perf_config=${PERF_CONFIG:-scripts/perf.env if present}"
+    echo "bench_addr=${BENCH_ADDR}"
+    echo "bench_clients=${BENCH_CLIENTS}"
+    echo "bench_duration=${BENCH_DURATION}"
+    echo "bench_rate_per_client=${BENCH_RATE_PER_CLIENT}"
+    echo "bench_rate_schedule=${BENCH_RATE_SCHEDULE}"
+    echo "bench_connect_ramp=${BENCH_CONNECT_RAMP}"
+    echo "bench_request_timeout=${BENCH_REQUEST_TIMEOUT}"
+    echo "bench_drain=${BENCH_DRAIN}"
+    echo "bench_payload=${BENCH_PAYLOAD}"
+    echo "bench_inflight=${BENCH_INFLIGHT}"
+    echo "bench_warmup=${BENCH_WARMUP}"
+    echo "bench_receiver_mode=${BENCH_RECEIVER_MODE}"
+    echo "bench_scenario=${BENCH_SCENARIO}"
     echo "uname=$(uname -a)"
     echo "ulimit_n=$(ulimit -n)"
 } >"${META_LOG}"
@@ -183,18 +220,18 @@ fi
 
 go run ./tests/perf \
     -addr "${BENCH_ADDR}" \
-    -clients 25000 \
-    -duration 240s \
-    -rate-per-client 0.1 \
-    -rate-schedule poisson \
-    -request-timeout 30s \
-    -drain 30s \
-    -payload 256 \
-    -inflight 1 \
-    -warmup 5 \
-    -receiver-mode random-online \
-    -connect-ramp 45s \
-    -scenario im_scaling_25000c_0_1rps_random_ramp45s \
+    -clients "${BENCH_CLIENTS}" \
+    -duration "${BENCH_DURATION}" \
+    -rate-per-client "${BENCH_RATE_PER_CLIENT}" \
+    -rate-schedule "${BENCH_RATE_SCHEDULE}" \
+    -request-timeout "${BENCH_REQUEST_TIMEOUT}" \
+    -drain "${BENCH_DRAIN}" \
+    -payload "${BENCH_PAYLOAD}" \
+    -inflight "${BENCH_INFLIGHT}" \
+    -warmup "${BENCH_WARMUP}" \
+    -receiver-mode "${BENCH_RECEIVER_MODE}" \
+    -connect-ramp "${BENCH_CONNECT_RAMP}" \
+    -scenario "${BENCH_SCENARIO}" \
     -out "${OUT_DIR}" 2>&1 | tee "${BENCH_LOG}"
 
 {
